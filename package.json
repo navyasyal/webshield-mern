@@ -1,0 +1,1 @@
+{"private":true,"scripts":{"dev":"docker compose up --build","test":"npm --prefix server test"}}

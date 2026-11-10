@@ -1,0 +1,2 @@
+# Kubernetes extension
+The Docker Compose environment is the supported local deployment. For Kubernetes, deploy API, worker, frontend, MongoDB, Redis, and lab separately, using Secrets for JWT/OAuth values and persistent volumes for MongoDB. Use a Kubernetes NetworkPolicy to restrict scanner-worker egress to the lab service. Do not expose the lab to the public Internet. This directory is a deployment extension checklist, not a production-ready Kubernetes manifest.
