@@ -1,6 +1,15 @@
-import React, { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
-import { io } from "socket.io-client";
+import React, {
+  useEffect,
+  useState,
+} from "react";
+
+import {
+  createRoot,
+} from "react-dom/client";
+
+import {
+  io,
+} from "socket.io-client";
 
 import {
   Shield,
@@ -16,312 +25,415 @@ import "./style.css";
 
 
 // ======================================================
-// API Helper
+// API
 // ======================================================
 
-async function api(path, options = {}) {
-  const response = await fetch("/api" + path, {
-    credentials: "same-origin",
+async function api(
+  path,
+  options = {}
+) {
+  const response =
+    await fetch(
+      "/api" + path,
+      {
+        credentials:
+          "same-origin",
 
-    headers: {
-      "Content-Type": "application/json",
-    },
+        headers: {
+          "Content-Type":
+            "application/json",
+        },
 
-    ...options,
-  });
+        ...options,
+      }
+    );
 
-  const data = await response
-    .json()
-    .catch(() => ({}));
 
-  if (!response.ok) {
+  const data =
+    await response
+      .json()
+      .catch(
+        () => ({})
+      );
+
+
+  if (
+    !response.ok
+  ) {
     throw new Error(
-      data.error || "Request failed"
+      data.error ||
+      "Request failed"
     );
   }
+
 
   return data;
 }
 
 
 // ======================================================
-// Main Application
+// App
 // ======================================================
 
 function App() {
-  // ----------------------------------------------------
-  // Authentication
-  // ----------------------------------------------------
-
-  const [user, setUser] =
-    useState(null);
-
-  const [mode, setMode] =
-    useState("login");
-
-  const [email, setEmail] =
-    useState("");
-
-  const [password, setPassword] =
-    useState("");
+  const [
+    user,
+    setUser,
+  ] = useState(
+    null
+  );
 
 
-  // ----------------------------------------------------
-  // Application State
-  // ----------------------------------------------------
-
-  const [activeView, setActiveView] =
-    useState("dashboard");
-
-  const [error, setError] =
-    useState("");
-
-  const [busy, setBusy] =
-    useState(false);
+  const [
+    mode,
+    setMode,
+  ] = useState(
+    "login"
+  );
 
 
-  // ----------------------------------------------------
-  // Scanner State
-  // ----------------------------------------------------
+  const [
+    email,
+    setEmail,
+  ] = useState(
+    ""
+  );
 
-  const [url, setUrl] =
-    useState(
-      "http://lab:4000/"
-    );
+
+  const [
+    password,
+    setPassword,
+  ] = useState(
+    ""
+  );
+
+
+  const [
+    activeView,
+    setActiveView,
+  ] = useState(
+    "dashboard"
+  );
+
+
+  const [
+    error,
+    setError,
+  ] = useState(
+    ""
+  );
+
+
+  const [
+    busy,
+    setBusy,
+  ] = useState(
+    false
+  );
+
+
+  const [
+    url,
+    setUrl,
+  ] = useState(
+    "http://lab:4000/"
+  );
+
 
   const [
     authorized,
     setAuthorized,
-  ] = useState(false);
+  ] = useState(
+    false
+  );
 
-  const [scans, setScans] =
-    useState([]);
+
+  const [
+    scans,
+    setScans,
+  ] = useState(
+    []
+  );
+
 
   const [
     selected,
     setSelected,
-  ] = useState(null);
+  ] = useState(
+    null
+  );
+
 
   const [
     liveProgress,
     setLiveProgress,
-  ] = useState(null);
+  ] = useState(
+    null
+  );
 
 
-  // ======================================================
-  // Load Logged-in User + Scan History
-  // ======================================================
+  // ====================================================
+  // Load User + Scans
+  // ====================================================
 
   async function load() {
     try {
       const currentUser =
-        await api("/me");
+        await api(
+          "/me"
+        );
+
 
       const scanList =
-        await api("/scans");
+        await api(
+          "/scans"
+        );
 
-      setUser(currentUser);
 
-      setScans(scanList);
+      setUser(
+        currentUser
+      );
+
+
+      setScans(
+        scanList
+      );
 
     } catch {
-      setUser(null);
+      setUser(
+        null
+      );
     }
   }
 
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(
+    () => {
+      load();
+    },
+    []
+  );
 
 
-  // ======================================================
-  // Poll Scan History
-  // ======================================================
+  // ====================================================
+  // Polling
+  // ====================================================
 
-  useEffect(() => {
-    if (!user) {
-      return;
-    }
+  useEffect(
+    () => {
+      if (
+        !user
+      ) {
+        return;
+      }
 
-    const timer = setInterval(
-      async () => {
-        try {
-          const items =
-            await api("/scans");
 
-          setScans(items);
+      const timer =
+        setInterval(
+          async () => {
+            try {
+              const items =
+                await api(
+                  "/scans"
+                );
 
-          if (selected?._id) {
-            const current =
-              items.find(
-                (scan) =>
-                  scan._id ===
-                  selected._id
+
+              setScans(
+                items
               );
 
-            if (current) {
-              setSelected(current);
-            }
-          }
-        } catch {
-          // Ignore polling errors
-        }
-      },
-      3000
-    );
 
-    return () => {
-      clearInterval(timer);
-    };
-  }, [
-    user,
-    selected?._id,
-  ]);
+              if (
+                selected?._id
+              ) {
+                const current =
+                  items.find(
+                    (
+                      scan
+                    ) =>
+                      scan._id ===
+                      selected._id
+                  );
 
 
-  // ======================================================
-  // Socket.IO Live Progress
-  // ======================================================
-
-  useEffect(() => {
-    if (!user) {
-      return;
-    }
-
-    const socket = io({
-      path: "/socket.io",
-
-      withCredentials: true,
-
-      transports: [
-        "websocket",
-        "polling",
-      ],
-    });
-
-
-    socket.on(
-      "connect",
-      () => {
-        console.log(
-          "Socket connected:",
-          socket.id
-        );
-      }
-    );
-
-
-    socket.on(
-      "scan:progress",
-      (event) => {
-        console.log(
-          "Scan progress:",
-          event
-        );
-
-        setLiveProgress(event);
-
-
-        // Update scan history immediately
-        setScans(
-          (currentScans) =>
-            currentScans.map(
-              (scan) => {
                 if (
-                  scan._id !==
-                  event.scanId
+                  current
                 ) {
-                  return scan;
+                  setSelected(
+                    current
+                  );
                 }
-
-                return {
-                  ...scan,
-
-                  status:
-                    event.status,
-
-                  progress: {
-                    percent:
-                      event.percent,
-
-                    stage:
-                      event.stage,
-
-                    message:
-                      event.message,
-                  },
-                };
               }
-            )
-        );
 
-
-        // Update selected scan
-        setSelected(
-          (current) => {
-            if (
-              !current ||
-              current._id !==
-              event.scanId
-            ) {
-              return current;
+            } catch {
+              // Ignore polling errors
             }
+          },
 
-            return {
-              ...current,
-
-              status:
-                event.status,
-
-              progress: {
-                percent:
-                  event.percent,
-
-                stage:
-                  event.stage,
-
-                message:
-                  event.message,
-              },
-            };
-          }
+          3000
         );
-      }
-    );
 
 
-    socket.on(
-      "connect_error",
-      (socketError) => {
-        console.error(
-          "Socket error:",
-          socketError.message
+      return () => {
+        clearInterval(
+          timer
         );
+      };
+    },
+
+    [
+      user,
+      selected?._id,
+    ]
+  );
+
+
+  // ====================================================
+  // Socket.IO
+  // ====================================================
+
+  useEffect(
+    () => {
+      if (
+        !user
+      ) {
+        return;
       }
-    );
 
 
-    return () => {
-      socket.disconnect();
-    };
-  }, [user]);
+      const socket =
+        io({
+          path:
+            "/socket.io",
+
+          withCredentials:
+            true,
+
+          transports: [
+            "websocket",
+            "polling",
+          ],
+        });
 
 
-  // ======================================================
+      socket.on(
+        "scan:progress",
+
+        (
+          event
+        ) => {
+          setLiveProgress(
+            event
+          );
+
+
+          setScans(
+            (
+              currentScans
+            ) =>
+              currentScans.map(
+                (
+                  scan
+                ) => {
+                  if (
+                    scan._id !==
+                    event.scanId
+                  ) {
+                    return scan;
+                  }
+
+
+                  return {
+                    ...scan,
+
+                    status:
+                      event.status,
+
+                    progress: {
+                      percent:
+                        event.percent,
+
+                      stage:
+                        event.stage,
+
+                      message:
+                        event.message,
+                    },
+                  };
+                }
+              )
+          );
+
+
+          setSelected(
+            (
+              current
+            ) => {
+              if (
+                !current ||
+                current._id !==
+                event.scanId
+              ) {
+                return current;
+              }
+
+
+              return {
+                ...current,
+
+                status:
+                  event.status,
+
+                progress: {
+                  percent:
+                    event.percent,
+
+                  stage:
+                    event.stage,
+
+                  message:
+                    event.message,
+                },
+              };
+            }
+          );
+        }
+      );
+
+
+      return () => {
+        socket.disconnect();
+      };
+    },
+
+    [
+      user,
+    ]
+  );
+
+
+  // ====================================================
   // Authentication
-  // ======================================================
+  // ====================================================
 
-  async function submitAuth(event) {
+  async function submitAuth(
+    event
+  ) {
     event.preventDefault();
 
-    setError("");
+    setError(
+      ""
+    );
+
 
     try {
       await api(
-        "/auth/" + mode,
+        "/auth/" +
+          mode,
+
         {
-          method: "POST",
+          method:
+            "POST",
 
           body:
             JSON.stringify({
@@ -331,11 +443,17 @@ function App() {
         }
       );
 
-      setPassword("");
+
+      setPassword(
+        ""
+      );
+
 
       await load();
 
-    } catch (authError) {
+    } catch (
+      authError
+    ) {
       setError(
         authError.message
       );
@@ -343,25 +461,39 @@ function App() {
   }
 
 
-  // ======================================================
+  // ====================================================
   // Start Scan
-  // ======================================================
+  // ====================================================
 
-  async function start(event) {
+  async function start(
+    event
+  ) {
     event.preventDefault();
 
-    setBusy(true);
 
-    setError("");
+    setBusy(
+      true
+    );
 
-    setLiveProgress(null);
+
+    setError(
+      ""
+    );
+
+
+    setLiveProgress(
+      null
+    );
+
 
     try {
       const result =
         await api(
           "/scans",
+
           {
-            method: "POST",
+            method:
+              "POST",
 
             body:
               JSON.stringify({
@@ -375,57 +507,74 @@ function App() {
       const scan =
         await api(
           "/scans/" +
-          result.id
+            result.id
         );
 
 
-      setSelected(scan);
+      setSelected(
+        scan
+      );
 
 
-      const updatedScans =
+      setActiveView(
+        "history"
+      );
+
+
+      const updated =
         await api(
           "/scans"
         );
 
 
       setScans(
-        updatedScans
+        updated
       );
 
-
-      // Move automatically to history/details
-      setActiveView(
-        "history"
-      );
-
-    } catch (scanError) {
+    } catch (
+      scanError
+    ) {
       setError(
         scanError.message
       );
 
     } finally {
-      setBusy(false);
+      setBusy(
+        false
+      );
     }
   }
 
 
-  // ======================================================
+  // ====================================================
   // Logout
-  // ======================================================
+  // ====================================================
 
   async function logout() {
     await api(
       "/auth/logout",
+
       {
-        method: "POST",
+        method:
+          "POST",
       }
     );
 
-    setUser(null);
 
-    setSelected(null);
+    setUser(
+      null
+    );
 
-    setLiveProgress(null);
+
+    setSelected(
+      null
+    );
+
+
+    setLiveProgress(
+      null
+    );
+
 
     setActiveView(
       "dashboard"
@@ -433,11 +582,13 @@ function App() {
   }
 
 
-  // ======================================================
-  // Login Screen
-  // ======================================================
+  // ====================================================
+  // Auth UI
+  // ====================================================
 
-  if (!user) {
+  if (
+    !user
+  ) {
     return (
       <main className="auth">
 
@@ -445,6 +596,7 @@ function App() {
 
           <div className="brand">
             <Shield size={30} />
+
             WebShield
           </div>
 
@@ -478,11 +630,11 @@ function App() {
                 }
 
                 onChange={
-                  (event) =>
+                  (
+                    event
+                  ) =>
                     setEmail(
-                      event
-                        .target
-                        .value
+                      event.target.value
                     )
                 }
 
@@ -504,11 +656,11 @@ function App() {
                 }
 
                 onChange={
-                  (event) =>
+                  (
+                    event
+                  ) =>
                     setPassword(
-                      event
-                        .target
-                        .value
+                      event.target.value
                     )
                 }
 
@@ -517,11 +669,13 @@ function App() {
             </label>
 
 
-            {error && (
-              <p className="error">
-                {error}
-              </p>
-            )}
+            {
+              error && (
+                <p className="error">
+                  {error}
+                </p>
+              )
+            }
 
 
             <button
@@ -576,9 +730,9 @@ function App() {
   }
 
 
-  // ======================================================
-  // Dashboard Statistics
-  // ======================================================
+  // ====================================================
+  // Dashboard Stats
+  // ====================================================
 
   const totalFindings =
     scans.reduce(
@@ -592,13 +746,16 @@ function App() {
             ?.length ||
           0
         ),
+
       0
     );
 
 
   const completedScans =
     scans.filter(
-      (scan) =>
+      (
+        scan
+      ) =>
         scan.status ===
         "completed"
     ).length;
@@ -606,7 +763,9 @@ function App() {
 
   const runningScans =
     scans.filter(
-      (scan) =>
+      (
+        scan
+      ) =>
         scan.status ===
           "running" ||
         scan.status ===
@@ -617,21 +776,25 @@ function App() {
   const highSeverity =
     scans
       .flatMap(
-        (scan) =>
+        (
+          scan
+        ) =>
           scan.findings ||
           []
       )
       .filter(
-        (finding) =>
+        (
+          finding
+        ) =>
           finding.severity ===
           "High"
       )
       .length;
 
 
-  // ======================================================
-  // Selected Scan Calculations
-  // ======================================================
+  // ====================================================
+  // Selected Scan
+  // ====================================================
 
   const pagesDiscovered =
     selected?.pages
@@ -662,6 +825,7 @@ function App() {
               ?.length ||
             0
           ),
+
         0
       ) ||
     0;
@@ -709,9 +873,9 @@ function App() {
     "Waiting for scanner worker";
 
 
-  // ======================================================
-  // Dashboard View
-  // ======================================================
+  // ====================================================
+  // Dashboard
+  // ====================================================
 
   function DashboardView() {
     return (
@@ -719,6 +883,7 @@ function App() {
         <header>
 
           <div>
+
             <h1>
               Security Overview
             </h1>
@@ -728,6 +893,7 @@ function App() {
               application security
               assessments
             </p>
+
           </div>
 
 
@@ -741,6 +907,7 @@ function App() {
         <section className="stats">
 
           <div>
+
             <span>
               Total Scans
             </span>
@@ -748,10 +915,12 @@ function App() {
             <strong>
               {scans.length}
             </strong>
+
           </div>
 
 
           <div>
+
             <span>
               Completed
             </span>
@@ -759,10 +928,12 @@ function App() {
             <strong>
               {completedScans}
             </strong>
+
           </div>
 
 
           <div>
+
             <span>
               Total Findings
             </span>
@@ -770,10 +941,12 @@ function App() {
             <strong>
               {totalFindings}
             </strong>
+
           </div>
 
 
           <div>
+
             <span>
               High Severity
             </span>
@@ -781,6 +954,7 @@ function App() {
             <strong>
               {highSeverity}
             </strong>
+
           </div>
 
         </section>
@@ -792,19 +966,21 @@ function App() {
             WebShield Scanner
           </h2>
 
+
           <p>
-            Automated security
-            assessment platform for
-            discovering pages, forms,
-            inputs, security
-            misconfigurations and
-            vulnerabilities.
+            Automated OWASP-focused
+            vulnerability assessment
+            with crawling, active
+            checks, browser discovery,
+            regression tracking and
+            reporting.
           </p>
 
 
           <div className="discovery-grid">
 
             <div className="discovery-card">
+
               <span>
                 Scanner Status
               </span>
@@ -817,10 +993,12 @@ function App() {
                     : "Ready"
                 }
               </strong>
+
             </div>
 
 
             <div className="discovery-card">
+
               <span>
                 Scan Mode
               </span>
@@ -828,10 +1006,12 @@ function App() {
               <strong>
                 Lab
               </strong>
+
             </div>
 
 
             <div className="discovery-card">
+
               <span>
                 Authentication
               </span>
@@ -839,17 +1019,20 @@ function App() {
               <strong>
                 Active
               </strong>
+
             </div>
 
 
             <div className="discovery-card">
+
               <span>
-                Scanner Engine
+                Regression Tracking
               </span>
 
               <strong>
-                Online
+                Active
               </strong>
+
             </div>
 
           </div>
@@ -870,109 +1053,121 @@ function App() {
         </section>
 
 
-        {scans.length > 0 && (
-          <section className="panel">
+        {
+          scans.length >
+            0 && (
 
-            <h2>
-              Recent Scans
-            </h2>
+            <section className="panel">
+
+              <h2>
+                Recent Scans
+              </h2>
 
 
-            <div className="table">
+              <div className="table">
 
-              <div className="tr head">
+                <div className="tr head">
 
-                <span>
-                  Target
-                </span>
+                  <span>
+                    Target
+                  </span>
 
-                <span>
-                  Status
-                </span>
+                  <span>
+                    Status
+                  </span>
 
-                <span>
-                  Findings
-                </span>
+                  <span>
+                    Findings
+                  </span>
 
-                <span>
-                  Action
-                </span>
+                  <span>
+                    Action
+                  </span>
+
+                </div>
+
+
+                {
+                  scans
+                    .slice(
+                      0,
+                      5
+                    )
+                    .map(
+                      (
+                        scan
+                      ) => (
+
+                        <div
+                          className="tr"
+
+                          key={
+                            scan._id
+                          }
+                        >
+
+                          <span className="truncate">
+                            {scan.url}
+                          </span>
+
+
+                          <span
+                            className={
+                              `status ${scan.status}`
+                            }
+                          >
+                            {scan.status}
+                          </span>
+
+
+                          <span>
+                            {
+                              scan.findings
+                                ?.length ||
+                              0
+                            }
+                          </span>
+
+
+                          <button
+                            type="button"
+
+                            className="link"
+
+                            onClick={() => {
+                              setSelected(
+                                scan
+                              );
+
+                              setActiveView(
+                                "history"
+                              );
+                            }}
+                          >
+                            View
+                          </button>
+
+                        </div>
+
+                      )
+                    )
+                }
 
               </div>
 
+            </section>
 
-              {scans
-                .slice(0, 5)
-                .map(
-                  (scan) => (
+          )
+        }
 
-                    <div
-                      className="tr"
-
-                      key={
-                        scan._id
-                      }
-                    >
-
-                      <span className="truncate">
-                        {scan.url}
-                      </span>
-
-
-                      <span
-                        className={
-                          `status ${scan.status}`
-                        }
-                      >
-                        {scan.status}
-                      </span>
-
-
-                      <span>
-                        {
-                          scan
-                            .findings
-                            ?.length ||
-                          0
-                        }
-                      </span>
-
-
-                      <button
-                        type="button"
-
-                        className="link"
-
-                        onClick={() => {
-                          setSelected(
-                            scan
-                          );
-
-                          setActiveView(
-                            "history"
-                          );
-                        }}
-                      >
-                        View
-                      </button>
-
-                    </div>
-
-                  )
-                )}
-
-            </div>
-
-          </section>
-        )}
       </>
     );
   }
 
 
-  // ======================================================
-  // New Scan View
-  // ======================================================
+  // ====================================================
+  // New Scan
+  // ====================================================
 
   function NewScanView() {
     return (
@@ -980,15 +1175,16 @@ function App() {
         <header>
 
           <div>
+
             <h1>
               New Security Scan
             </h1>
 
             <p>
               Start an authorized
-              vulnerability
-              assessment
+              vulnerability assessment
             </p>
+
           </div>
 
 
@@ -1007,8 +1203,8 @@ function App() {
 
 
           <p>
-            Current capstone version
-            only allows the bundled
+            WebShield currently
+            scans the bundled
             controlled laboratory
             target.
           </p>
@@ -1021,6 +1217,7 @@ function App() {
           >
 
             <label>
+
               Target URL
 
               <input
@@ -1029,16 +1226,17 @@ function App() {
                 }
 
                 onChange={
-                  (event) =>
+                  (
+                    event
+                  ) =>
                     setUrl(
-                      event
-                        .target
-                        .value
+                      event.target.value
                     )
                 }
 
                 required
               />
+
             </label>
 
 
@@ -1052,18 +1250,17 @@ function App() {
                 }
 
                 onChange={
-                  (event) =>
+                  (
+                    event
+                  ) =>
                     setAuthorized(
-                      event
-                        .target
-                        .checked
+                      event.target.checked
                     )
                 }
               />
 
-              I own or am
-              authorized to test
-              this target.
+              I own or am authorized
+              to test this target.
 
             </label>
 
@@ -1086,11 +1283,13 @@ function App() {
           </form>
 
 
-          {error && (
-            <p className="error">
-              {error}
-            </p>
-          )}
+          {
+            error && (
+              <p className="error">
+                {error}
+              </p>
+            )
+          }
 
         </section>
 
@@ -1105,6 +1304,7 @@ function App() {
           <div className="discovery-grid">
 
             <div className="discovery-card">
+
               <span>
                 Step 1
               </span>
@@ -1112,10 +1312,12 @@ function App() {
               <strong>
                 Crawl
               </strong>
+
             </div>
 
 
             <div className="discovery-card">
+
               <span>
                 Step 2
               </span>
@@ -1123,10 +1325,12 @@ function App() {
               <strong>
                 Analyze
               </strong>
+
             </div>
 
 
             <div className="discovery-card">
+
               <span>
                 Step 3
               </span>
@@ -1134,17 +1338,20 @@ function App() {
               <strong>
                 Detect
               </strong>
+
             </div>
 
 
             <div className="discovery-card">
+
               <span>
                 Step 4
               </span>
 
               <strong>
-                Report
+                Compare
               </strong>
+
             </div>
 
           </div>
@@ -1155,14 +1362,103 @@ function App() {
   }
 
 
-  // ======================================================
-  // Scan Details Component
-  // ======================================================
+  // ====================================================
+  // Comparison Finding List
+  // ====================================================
 
-  function ScanDetails() {
-    if (!selected) {
+  function ComparisonList({
+    title,
+    findings,
+  }) {
+    if (
+      !findings ||
+      findings.length ===
+        0
+    ) {
       return null;
     }
+
+
+    return (
+      <div className="discovery-section">
+
+        <h3>
+          {title}
+        </h3>
+
+
+        {
+          findings.map(
+            (
+              finding,
+              index
+            ) => (
+
+              <div
+                className="discovered-item"
+
+                key={
+                  finding.fingerprint ||
+                  index
+                }
+              >
+
+                <strong>
+                  {
+                    finding.title
+                  }
+                </strong>
+
+
+                <p>
+                  Severity:{" "}
+                  {
+                    finding.severity ||
+                    "N/A"
+                  }
+                </p>
+
+
+                <p>
+                  {
+                    finding.owasp ||
+                    "OWASP mapping unavailable"
+                  }
+                </p>
+
+
+                <small>
+                  {
+                    finding.url
+                  }
+                </small>
+
+              </div>
+
+            )
+          )
+        }
+
+      </div>
+    );
+  }
+
+
+  // ====================================================
+  // Scan Details
+  // ====================================================
+
+  function ScanDetails() {
+    if (
+      !selected
+    ) {
+      return null;
+    }
+
+
+    const comparison =
+      selected.comparison;
+
 
     return (
       <section className="panel">
@@ -1170,6 +1466,7 @@ function App() {
         <div className="heading">
 
           <h2>
+
             Scan Details{" "}
 
             <span
@@ -1177,43 +1474,50 @@ function App() {
                 `status ${selected.status}`
               }
             >
-              {selected.status}
+              {
+                selected.status
+              }
             </span>
+
           </h2>
 
 
-          {selected.status ===
-            "completed" && (
+          {
+            selected.status ===
+              "completed" && (
 
-            <a
-              className="download"
+              <a
+                className="download"
 
-              href={
-                `/api/scans/${selected._id}/report`
-              }
-            >
-              <Download
-                size={16}
-              />
+                href={
+                  `/api/scans/${selected._id}/report`
+                }
+              >
+                <Download
+                  size={16}
+                />
 
-              PDF Report
-            </a>
+                PDF Report
+              </a>
 
-          )}
+            )
+          }
 
         </div>
 
 
         <p>
+
           <strong>
             Target:
           </strong>{" "}
 
           {selected.url}
+
         </p>
 
 
-        {/* Live / Stored Progress */}
+        {/* Progress */}
 
         <div className="scan-progress">
 
@@ -1252,7 +1556,7 @@ function App() {
         </div>
 
 
-        {/* Discovery Cards */}
+        {/* Discovery */}
 
         <div className="discovery-grid">
 
@@ -1310,7 +1614,7 @@ function App() {
         </div>
 
 
-        {/* Security Score */}
+        {/* Score */}
 
         <div className="security-score">
 
@@ -1320,8 +1624,7 @@ function App() {
 
           <strong>
             {
-              selected
-                .securityScore ??
+              selected.securityScore ??
               100
             }
             /100
@@ -1330,147 +1633,305 @@ function App() {
         </div>
 
 
-        {/* Error */}
+        {/* ==================================================
+            Scan Comparison
+            ================================================== */}
 
-        {selected.error && (
+        {
+          selected.status ===
+            "completed" &&
+          comparison && (
 
-          <p className="error">
-            {selected.error}
-          </p>
+            <div className="discovery-section">
 
-        )}
-
-
-        {/* Discovered Forms */}
-
-        {formsFound > 0 && (
-
-          <div className="discovery-section">
-
-            <h3>
-              Discovered Forms
-            </h3>
+              <h3>
+                Vulnerability Comparison
+              </h3>
 
 
-            {
-              selected
-                .discovery
-                .forms
-                .map(
-                  (
-                    form,
-                    index
-                  ) => (
+              {
+                comparison.hasPreviousScan
+                  ? (
 
-                    <div
-                      className="discovered-item"
-
-                      key={
-                        index
-                      }
-                    >
-
-                      <strong>
-                        {form.method}{" "}
-                        {form.action}
-                      </strong>
-
-
-                      <p>
-                        Page:{" "}
-                        {form.page}
-                      </p>
-
-
-                      <p>
-                        Inputs:{" "}
-
-                        {
-                          form.inputs
-                            ?.map(
-                              (
-                                input
-                              ) =>
-                                input.name ||
-                                input.type
-                            )
-                            .join(
-                              ", "
-                            ) ||
-                          "None"
-                        }
-                      </p>
-
-                    </div>
+                    <p>
+                      Compared with the
+                      previous completed
+                      scan of the same
+                      target.
+                    </p>
 
                   )
-                )
-            }
+                  : (
 
-          </div>
+                    <p>
+                      This is the first
+                      completed scan for
+                      this target. All
+                      detected findings
+                      are considered new.
+                    </p>
 
-        )}
+                  )
+              }
+
+
+              <div className="discovery-grid">
+
+                <div className="discovery-card">
+
+                  <span>
+                    New
+                  </span>
+
+                  <strong>
+                    {
+                      comparison.newCount ||
+                      0
+                    }
+                  </strong>
+
+                </div>
+
+
+                <div className="discovery-card">
+
+                  <span>
+                    Resolved
+                  </span>
+
+                  <strong>
+                    {
+                      comparison.resolvedCount ||
+                      0
+                    }
+                  </strong>
+
+                </div>
+
+
+                <div className="discovery-card">
+
+                  <span>
+                    Unchanged
+                  </span>
+
+                  <strong>
+                    {
+                      comparison.unchangedCount ||
+                      0
+                    }
+                  </strong>
+
+                </div>
+
+
+                <div className="discovery-card">
+
+                  <span>
+                    Comparison
+                  </span>
+
+                  <strong>
+                    {
+                      comparison.hasPreviousScan
+                        ? "Available"
+                        : "Baseline"
+                    }
+                  </strong>
+
+                </div>
+
+              </div>
+
+
+              <ComparisonList
+                title="New Vulnerabilities"
+
+                findings={
+                  comparison.newFindings
+                }
+              />
+
+
+              <ComparisonList
+                title="Resolved Vulnerabilities"
+
+                findings={
+                  comparison.resolvedFindings
+                }
+              />
+
+
+              <ComparisonList
+                title="Unchanged Vulnerabilities"
+
+                findings={
+                  comparison.unchangedFindings
+                }
+              />
+
+            </div>
+
+          )
+        }
+
+
+        {/* Error */}
+
+        {
+          selected.error && (
+            <p className="error">
+              {
+                selected.error
+              }
+            </p>
+          )
+        }
+
+
+        {/* Forms */}
+
+        {
+          formsFound >
+            0 && (
+
+            <div className="discovery-section">
+
+              <h3>
+                Discovered Forms
+              </h3>
+
+
+              {
+                selected
+                  .discovery
+                  .forms
+                  .map(
+                    (
+                      form,
+                      index
+                    ) => (
+
+                      <div
+                        className="discovered-item"
+
+                        key={
+                          index
+                        }
+                      >
+
+                        <strong>
+                          {
+                            form.method
+                          }{" "}
+                          {
+                            form.action
+                          }
+                        </strong>
+
+
+                        <p>
+                          Page:{" "}
+                          {
+                            form.page
+                          }
+                        </p>
+
+
+                        <p>
+
+                          Inputs:{" "}
+
+                          {
+                            form.inputs
+                              ?.map(
+                                (
+                                  input
+                                ) =>
+                                  input.name ||
+                                  input.type
+                              )
+                              .join(
+                                ", "
+                              ) ||
+                            "None"
+                          }
+
+                        </p>
+
+                      </div>
+
+                    )
+                  )
+              }
+
+            </div>
+
+          )
+        }
 
 
         {/* API Requests */}
 
-        {apiRequestsFound > 0 && (
+        {
+          apiRequestsFound >
+            0 && (
 
-          <div className="discovery-section">
+            <div className="discovery-section">
 
-            <h3>
-              API Requests
-            </h3>
+              <h3>
+                API Requests
+              </h3>
 
 
-            {
-              selected
-                .discovery
-                .apiRequests
-                .map(
-                  (
-                    request,
-                    index
-                  ) => (
+              {
+                selected
+                  .discovery
+                  .apiRequests
+                  .map(
+                    (
+                      request,
+                      index
+                    ) => (
 
-                    <div
-                      className="discovered-item"
+                      <div
+                        className="discovered-item"
 
-                      key={
-                        index
-                      }
-                    >
-
-                      <strong>
-                        {
-                          request.method
-                        }{" "}
-                        {
-                          request.url
+                        key={
+                          index
                         }
-                      </strong>
+                      >
+
+                        <strong>
+                          {
+                            request.method
+                          }{" "}
+                          {
+                            request.url
+                          }
+                        </strong>
 
 
-                      <p>
-                        Resource Type:{" "}
-                        {
-                          request
-                            .resourceType
-                        }
-                      </p>
+                        <p>
+                          Resource Type:{" "}
+                          {
+                            request.resourceType
+                          }
+                        </p>
 
-                    </div>
+                      </div>
 
+                    )
                   )
-                )
-            }
+              }
 
-          </div>
+            </div>
 
-        )}
+          )
+        }
 
 
-        {/* Security Findings */}
+        {/* Findings */}
 
         <div className="findings-section">
 
@@ -1483,13 +1944,13 @@ function App() {
             (
               selected.findings ||
               []
-            ).length === 0
+            ).length ===
+            0
               ? (
 
                 <p>
-                  No security
-                  findings currently
-                  available.
+                  No security findings
+                  currently available.
                 </p>
 
               )
@@ -1505,8 +1966,7 @@ function App() {
                       className="finding"
 
                       key={
-                        finding
-                          .fingerprint ||
+                        finding.fingerprint ||
                         index
                       }
                     >
@@ -1523,8 +1983,7 @@ function App() {
                         <span
                           className={
                             `severity ${
-                              finding
-                                .severity
+                              finding.severity
                                 ?.toLowerCase()
                                 .replace(
                                   " ",
@@ -1535,8 +1994,7 @@ function App() {
                           }
                         >
                           {
-                            finding
-                              .severity
+                            finding.severity
                           }
                         </span>
 
@@ -1544,6 +2002,7 @@ function App() {
 
 
                       <p>
+
                         {
                           finding.owasp ||
                           "OWASP mapping unavailable"
@@ -1554,10 +2013,10 @@ function App() {
                         Confidence:{" "}
 
                         {
-                          finding
-                            .confidence ||
+                          finding.confidence ||
                           "N/A"
                         }
+
                       </p>
 
 
@@ -1567,28 +2026,30 @@ function App() {
 
 
                       <p>
+
                         <b>
                           Evidence:
                         </b>{" "}
 
                         {
-                          finding
-                            .evidence ||
+                          finding.evidence ||
                           "N/A"
                         }
+
                       </p>
 
 
                       <p>
+
                         <b>
                           Remediation:
                         </b>{" "}
 
                         {
-                          finding
-                            .remediation ||
+                          finding.remediation ||
                           "N/A"
                         }
+
                       </p>
 
                     </article>
@@ -1606,9 +2067,9 @@ function App() {
   }
 
 
-  // ======================================================
-  // Scan History View
-  // ======================================================
+  // ====================================================
+  // History
+  // ====================================================
 
   function HistoryView() {
     return (
@@ -1616,15 +2077,17 @@ function App() {
         <header>
 
           <div>
+
             <h1>
               Scan History
             </h1>
 
             <p>
               Review previous
-              security assessments
-              and reports
+              assessments and
+              vulnerability changes
             </p>
+
           </div>
 
 
@@ -1644,163 +2107,156 @@ function App() {
 
           {
             scans.length ===
-            0
-              ? (
+              0
+                ? (
 
-                <p>
-                  No scans available.
-                </p>
+                  <p>
+                    No scans available.
+                  </p>
 
-              )
-              : (
+                )
+                : (
 
-                <div className="table">
+                  <div className="table">
 
-                  <div className="tr head">
+                    <div className="tr head">
 
-                    <span>
-                      Target
-                    </span>
+                      <span>
+                        Target
+                      </span>
 
-                    <span>
-                      Status
-                    </span>
+                      <span>
+                        Status
+                      </span>
 
-                    <span>
-                      Findings
-                    </span>
+                      <span>
+                        Findings
+                      </span>
 
-                    <span>
-                      Action
-                    </span>
+                      <span>
+                        Action
+                      </span>
+
+                    </div>
+
+
+                    {
+                      scans.map(
+                        (
+                          scan
+                        ) => (
+
+                          <div
+                            className="tr"
+
+                            key={
+                              scan._id
+                            }
+                          >
+
+                            <span className="truncate">
+                              {
+                                scan.url
+                              }
+                            </span>
+
+
+                            <span
+                              className={
+                                `status ${scan.status}`
+                              }
+                            >
+                              {
+                                scan.status
+                              }
+                            </span>
+
+
+                            <span>
+                              {
+                                scan.findings
+                                  ?.length ||
+                                0
+                              }
+                            </span>
+
+
+                            <button
+                              type="button"
+
+                              className="link"
+
+                              onClick={() =>
+                                setSelected(
+                                  scan
+                                )
+                              }
+                            >
+                              View
+                            </button>
+
+                          </div>
+
+                        )
+                      )
+                    }
 
                   </div>
 
-
-                  {
-                    scans.map(
-                      (
-                        scan
-                      ) => (
-
-                        <div
-                          className="tr"
-
-                          key={
-                            scan._id
-                          }
-                        >
-
-                          <span className="truncate">
-
-                            {
-                              scan.url
-                            }
-
-                          </span>
-
-
-                          <span
-                            className={
-                              `status ${scan.status}`
-                            }
-                          >
-
-                            {
-                              scan.status
-                            }
-
-                          </span>
-
-
-                          <span>
-
-                            {
-                              scan
-                                .findings
-                                ?.length ||
-                              0
-                            }
-
-                          </span>
-
-
-                          <button
-                            type="button"
-
-                            className="link"
-
-                            onClick={() =>
-                              setSelected(
-                                scan
-                              )
-                            }
-                          >
-                            View
-                          </button>
-
-                        </div>
-
-                      )
-                    )
-                  }
-
-                </div>
-
-              )
+                )
           }
 
         </section>
 
 
-        {selected && (
+        {
+          selected && (
 
-          <>
-            <button
-              type="button"
+            <>
+              <button
+                type="button"
 
-              className="link"
+                className="link"
 
-              onClick={() =>
-                setSelected(
-                  null
-                )
-              }
+                onClick={() =>
+                  setSelected(
+                    null
+                  )
+                }
 
-              style={{
-                marginBottom:
-                  "12px",
-              }}
-            >
-              <ArrowLeft
-                size={16}
-              />{" "}
+                style={{
+                  marginBottom:
+                    "12px",
+                }}
+              >
 
-              Close Scan Details
-            </button>
+                <ArrowLeft
+                  size={16}
+                />{" "}
+
+                Close Scan Details
+
+              </button>
 
 
-            <ScanDetails />
-          </>
+              <ScanDetails />
 
-        )}
+            </>
+
+          )
+        }
 
       </>
     );
   }
 
 
-  // ======================================================
+  // ====================================================
   // Main UI
-  // ======================================================
+  // ====================================================
 
   return (
     <div className="shell">
-
-
-      {/* ==================================================
-          Sidebar
-          ================================================== */}
 
       <aside>
 
@@ -1816,9 +2272,9 @@ function App() {
         <div
           className={
             activeView ===
-            "dashboard"
-              ? "nav active"
-              : "nav"
+              "dashboard"
+                ? "nav active"
+                : "nav"
           }
 
           onClick={() =>
@@ -1845,9 +2301,9 @@ function App() {
         <div
           className={
             activeView ===
-            "new-scan"
-              ? "nav active"
-              : "nav"
+              "new-scan"
+                ? "nav active"
+                : "nav"
           }
 
           onClick={() => {
@@ -1855,7 +2311,9 @@ function App() {
               "new-scan"
             );
 
-            setError("");
+            setError(
+              ""
+            );
           }}
 
           style={{
@@ -1876,9 +2334,9 @@ function App() {
         <div
           className={
             activeView ===
-            "history"
-              ? "nav active"
-              : "nav"
+              "history"
+                ? "nav active"
+                : "nav"
           }
 
           onClick={() =>
@@ -1930,10 +2388,6 @@ function App() {
       </aside>
 
 
-      {/* ==================================================
-          Main Content
-          ================================================== */}
-
       <main className="content">
 
         {
@@ -1967,7 +2421,7 @@ function App() {
 
 
 // ======================================================
-// Render React
+// Render
 // ======================================================
 
 createRoot(

@@ -8,84 +8,62 @@ import mongoose from "mongoose";
 export async function connectDb() {
   const mongoUrl =
     process.env.MONGO_URL ||
-    "mongodb://localhost:27017/webshield";
+    "mongodb://mongo:27017/webshield";
 
-  await mongoose.connect(mongoUrl);
+  await mongoose.connect(
+    mongoUrl
+  );
 
-  return mongoose.connection;
+  console.log(
+    "MongoDB connected"
+  );
 }
-
-
-// ======================================================
-// Common Options
-// ======================================================
-
-const schemaOptions = {
-  timestamps: true,
-};
 
 
 // ======================================================
 // User Schema
 // ======================================================
 
-const UserSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      trim: true,
-      maxlength: 100,
-      default: "",
+const UserSchema =
+  new mongoose.Schema(
+    {
+      name: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+
+      email: {
+        type: String,
+        required: true,
+        unique: true,
+        lowercase: true,
+        trim: true,
+      },
+
+      passwordHash: {
+        type: String,
+        default: null,
+      },
+
+      googleId: {
+        type: String,
+        default: null,
+      },
+
+      role: {
+        type: String,
+        default: "user",
+      },
     },
-
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-      lowercase: true,
-      trim: true,
-      maxlength: 200,
-    },
-
-    passwordHash: {
-      type: String,
-      default: null,
-    },
-
-    googleId: {
-      type: String,
-      default: null,
-    },
-
-    role: {
-      type: String,
-      enum: [
-        "analyst",
-        "admin",
-      ],
-      default: "analyst",
-    },
-  },
-  schemaOptions
-);
-
-UserSchema.index({
-  email: 1,
-});
-
-UserSchema.index({
-  googleId: 1,
-});
-
-export const User =
-  mongoose.model(
-    "User",
-    UserSchema
+    {
+      timestamps: true,
+    }
   );
 
 
 // ======================================================
-// Discovered Input
+// Dynamic Discovery Schemas
 // ======================================================
 
 const InputSchema =
@@ -107,10 +85,6 @@ const InputSchema =
   );
 
 
-// ======================================================
-// Discovered Form
-// ======================================================
-
 const FormSchema =
   new mongoose.Schema(
     {
@@ -130,7 +104,10 @@ const FormSchema =
       },
 
       inputs: {
-        type: [InputSchema],
+        type: [
+          InputSchema,
+        ],
+
         default: [],
       },
     },
@@ -139,10 +116,6 @@ const FormSchema =
     }
   );
 
-
-// ======================================================
-// Discovered API Request
-// ======================================================
 
 const ApiRequestSchema =
   new mongoose.Schema(
@@ -177,17 +150,26 @@ const FindingSchema =
     {
       code: {
         type: String,
-        default: "",
+        required: true,
       },
 
       title: {
         type: String,
-        default: "Security Finding",
+        required: true,
       },
 
       severity: {
         type: String,
-        default: "Informational",
+
+        enum: [
+          "Critical",
+          "High",
+          "Medium",
+          "Low",
+          "Info",
+        ],
+
+        default: "Low",
       },
 
       confidence: {
@@ -217,18 +199,11 @@ const FindingSchema =
 
       fingerprint: {
         type: String,
-        default: "",
+        required: true,
       },
 
       status: {
         type: String,
-        enum: [
-          "Open",
-          "Confirmed",
-          "False Positive",
-          "Accepted Risk",
-          "Resolved",
-        ],
         default: "Open",
       },
 
@@ -254,6 +229,49 @@ const FindingSchema =
 
 
 // ======================================================
+// Comparison Snapshot
+// ======================================================
+
+const FindingSnapshotSchema =
+  new mongoose.Schema(
+    {
+      fingerprint: {
+        type: String,
+        default: "",
+      },
+
+      code: {
+        type: String,
+        default: "",
+      },
+
+      title: {
+        type: String,
+        default: "",
+      },
+
+      severity: {
+        type: String,
+        default: "",
+      },
+
+      owasp: {
+        type: String,
+        default: "",
+      },
+
+      url: {
+        type: String,
+        default: "",
+      },
+    },
+    {
+      _id: false,
+    }
+  );
+
+
+// ======================================================
 // Scan Schema
 // ======================================================
 
@@ -262,18 +280,21 @@ const ScanSchema =
     {
       owner: {
         type:
-          mongoose.Schema.Types
-            .ObjectId,
+          mongoose.Schema.Types.ObjectId,
 
-        ref: "User",
+        ref:
+          "User",
 
-        required: true,
+        required:
+          true,
+
+        index:
+          true,
       },
 
       url: {
         type: String,
         required: true,
-        trim: true,
       },
 
       status: {
@@ -286,7 +307,11 @@ const ScanSchema =
           "failed",
         ],
 
-        default: "queued",
+        default:
+          "queued",
+
+        index:
+          true,
       },
 
       scanType: {
@@ -298,15 +323,19 @@ const ScanSchema =
           "custom",
         ],
 
-        default: "full",
+        default:
+          "full",
       },
+
+
+      // ================================================
+      // Live Progress
+      // ================================================
 
       progress: {
         percent: {
           type: Number,
           default: 0,
-          min: 0,
-          max: 100,
         },
 
         stage: {
@@ -321,38 +350,65 @@ const ScanSchema =
         },
       },
 
+
+      // ================================================
+      // Discovered Pages
+      // ================================================
+
       pages: {
-        type: [String],
-        default: [],
+        type: [
+          String,
+        ],
+
+        default:
+          [],
       },
+
+
+      // ================================================
+      // Dynamic Discovery
+      // ================================================
 
       discovery: {
         forms: {
-          type: [FormSchema],
-          default: [],
+          type: [
+            FormSchema,
+          ],
+
+          default:
+            [],
         },
 
         apiRequests: {
           type: [
             ApiRequestSchema,
           ],
-          default: [],
+
+          default:
+            [],
         },
       },
+
+
+      // ================================================
+      // Findings
+      // ================================================
 
       findings: {
         type: [
           FindingSchema,
         ],
-        default: [],
+
+        default:
+          [],
       },
 
-      summary: {
-        totalFindings: {
-          type: Number,
-          default: 0,
-        },
 
+      // ================================================
+      // Scan Summary
+      // ================================================
+
+      summary: {
         critical: {
           type: Number,
           default: 0,
@@ -373,33 +429,108 @@ const ScanSchema =
           default: 0,
         },
 
-        informational: {
+        info: {
           type: Number,
           default: 0,
         },
 
-        pagesDiscovered: {
+        pages: {
           type: Number,
           default: 0,
         },
 
-        formsDiscovered: {
+        forms: {
           type: Number,
           default: 0,
         },
 
-        apiRequestsDiscovered: {
+        apiRequests: {
           type: Number,
           default: 0,
         },
       },
+
+
+      // ================================================
+      // Security Score
+      // ================================================
 
       securityScore: {
         type: Number,
         default: 100,
-        min: 0,
-        max: 100,
       },
+
+
+      // ================================================
+      // Regression / Comparison Tracking
+      // ================================================
+
+      comparison: {
+        hasPreviousScan: {
+          type: Boolean,
+          default: false,
+        },
+
+        previousScanId: {
+          type:
+            mongoose.Schema.Types.ObjectId,
+
+          ref:
+            "Scan",
+
+          default:
+            null,
+        },
+
+        previousFinishedAt: {
+          type: Date,
+          default: null,
+        },
+
+        newCount: {
+          type: Number,
+          default: 0,
+        },
+
+        resolvedCount: {
+          type: Number,
+          default: 0,
+        },
+
+        unchangedCount: {
+          type: Number,
+          default: 0,
+        },
+
+        newFindings: {
+          type: [
+            FindingSnapshotSchema,
+          ],
+
+          default: [],
+        },
+
+        resolvedFindings: {
+          type: [
+            FindingSnapshotSchema,
+          ],
+
+          default: [],
+        },
+
+        unchangedFindings: {
+          type: [
+            FindingSnapshotSchema,
+          ],
+
+          default: [],
+        },
+      },
+
+
+      // ================================================
+      // Error / Timing
+      // ================================================
 
       error: {
         type: String,
@@ -416,13 +547,14 @@ const ScanSchema =
         default: null,
       },
     },
-
-    schemaOptions
+    {
+      timestamps: true,
+    }
   );
 
 
 // ======================================================
-// Indexes
+// Useful Indexes
 // ======================================================
 
 ScanSchema.index({
@@ -430,17 +562,34 @@ ScanSchema.index({
   createdAt: -1,
 });
 
+
 ScanSchema.index({
   owner: 1,
   status: 1,
 });
 
 
+ScanSchema.index({
+  owner: 1,
+  url: 1,
+  finishedAt: -1,
+});
+
+
 // ======================================================
-// Model
+// Models
 // ======================================================
 
+export const User =
+  mongoose.models.User ||
+  mongoose.model(
+    "User",
+    UserSchema
+  );
+
+
 export const Scan =
+  mongoose.models.Scan ||
   mongoose.model(
     "Scan",
     ScanSchema
