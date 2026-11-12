@@ -1183,6 +1183,10 @@ app.get(
 
 // ======================================================
 // Google Login
+//
+// IMPORTANT:
+// prompt: "select_account"
+// forces Google account chooser every time.
 // ======================================================
 
 app.get(
@@ -1209,6 +1213,7 @@ app.get(
 
     passport.authenticate(
       "google",
+
       {
         scope: [
           "profile",
@@ -1217,6 +1222,9 @@ app.get(
 
         session:
           false,
+
+        prompt:
+          "select_account",
       }
     )(
       req,

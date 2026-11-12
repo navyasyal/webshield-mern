@@ -1,0 +1,554 @@
+/* ======================================================
+   WebShield Scan History
+   ====================================================== */
+
+.history-toolbar {
+  display: grid;
+  grid-template-columns:
+    minmax(220px, 2fr)
+    minmax(150px, 0.9fr)
+    minmax(170px, 1fr)
+    auto;
+
+  gap: 10px;
+
+  align-items: center;
+
+  margin-bottom: 18px;
+
+  padding: 14px;
+
+  border: 1px solid var(--border);
+
+  border-radius: 14px;
+
+  background:
+    linear-gradient(
+      145deg,
+      #f8fafc,
+      #ffffff
+    );
+}
+
+
+/* ======================================================
+   Search
+   ====================================================== */
+
+.history-search {
+  position: relative;
+}
+
+.history-search svg {
+  position: absolute;
+
+  left: 12px;
+  top: 50%;
+
+  transform: translateY(-50%);
+
+  color: #94a3b8;
+
+  pointer-events: none;
+}
+
+.history-search input {
+  padding-left: 40px;
+}
+
+
+/* ======================================================
+   Select Wrapper
+   ====================================================== */
+
+.history-select-wrap {
+  position: relative;
+}
+
+.history-select-wrap > svg {
+  position: absolute;
+
+  left: 11px;
+  top: 50%;
+
+  z-index: 2;
+
+  transform: translateY(-50%);
+
+  color: #94a3b8;
+
+  pointer-events: none;
+}
+
+.history-select-wrap select {
+  padding-left: 38px;
+}
+
+
+/* ======================================================
+   Result Information
+   ====================================================== */
+
+.history-summary {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+
+  gap: 15px;
+
+  margin-bottom: 12px;
+}
+
+.history-summary p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+}
+
+.history-summary strong {
+  color: var(--navy);
+}
+
+
+/* ======================================================
+   Table Container
+   ====================================================== */
+
+.history-table {
+  overflow: hidden;
+
+  border: 1px solid var(--border);
+
+  border-radius: 14px;
+
+  background: white;
+}
+
+
+/* ======================================================
+   Table Row
+   ====================================================== */
+
+.history-row {
+  display: grid;
+
+  grid-template-columns:
+    minmax(180px, 1.7fr)
+    minmax(135px, 1fr)
+    minmax(90px, 0.7fr)
+    minmax(90px, 0.65fr)
+    minmax(180px, 1.15fr)
+    90px;
+
+  align-items: center;
+
+  gap: 13px;
+
+  min-height: 70px;
+
+  padding:
+    12px
+    15px;
+
+  border-bottom:
+    1px solid #edf1f5;
+
+  transition:
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+
+.history-row:last-child {
+  border-bottom: 0;
+}
+
+.history-row:not(.history-head):hover {
+  background:
+    linear-gradient(
+      90deg,
+      #f8fbff,
+      #ffffff
+    );
+
+  transform:
+    translateX(2px);
+}
+
+
+/* ======================================================
+   Header
+   ====================================================== */
+
+.history-head {
+  min-height: 46px;
+
+  background: #f6f8fb;
+
+  color: var(--muted);
+
+  font-size: 10px;
+
+  font-weight: 850;
+
+  text-transform: uppercase;
+
+  letter-spacing: 0.45px;
+}
+
+
+/* ======================================================
+   Target
+   ====================================================== */
+
+.history-target {
+  min-width: 0;
+}
+
+.history-target strong {
+  display: block;
+
+  overflow: hidden;
+
+  color: var(--navy);
+
+  font-size: 12px;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+}
+
+.history-target span {
+  display: block;
+
+  margin-top: 4px;
+
+  overflow: hidden;
+
+  color: var(--muted);
+
+  font-size: 9px;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+}
+
+
+/* ======================================================
+   Date
+   ====================================================== */
+
+.history-date {
+  display: flex;
+
+  align-items: center;
+
+  gap: 7px;
+
+  color: var(--soft);
+
+  font-size: 11px;
+}
+
+.history-date svg {
+  flex: 0 0 auto;
+
+  color: #94a3b8;
+}
+
+
+/* ======================================================
+   Security Score Badge
+   ====================================================== */
+
+.history-score {
+  width: fit-content;
+
+  min-width: 62px;
+
+  padding:
+    7px
+    9px;
+
+  border-radius: 10px;
+
+  font-size: 11px;
+
+  font-weight: 850;
+
+  text-align: center;
+}
+
+.history-score.strong {
+  background: #dcfce7;
+  color: #087443;
+}
+
+.history-score.good {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.history-score.warning {
+  background: #fef3c7;
+  color: #956000;
+}
+
+.history-score.danger {
+  background: #fee2e2;
+  color: #b42318;
+}
+
+.history-score.pending {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+
+/* ======================================================
+   Finding Pills
+   ====================================================== */
+
+.history-findings {
+  display: flex;
+
+  flex-wrap: wrap;
+
+  gap: 5px;
+}
+
+.history-finding-pill {
+  display: inline-flex;
+
+  align-items: center;
+
+  gap: 4px;
+
+  padding:
+    4px
+    7px;
+
+  border-radius: 999px;
+
+  font-size: 9px;
+
+  font-weight: 800;
+}
+
+.history-finding-pill.high {
+  background: #fee2e2;
+  color: #b42318;
+}
+
+.history-finding-pill.medium {
+  background: #fef3c7;
+  color: #956000;
+}
+
+.history-finding-pill.low {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.history-finding-pill.none {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+
+/* ======================================================
+   View Action
+   ====================================================== */
+
+.history-view-btn {
+  display: inline-flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  gap: 5px;
+
+  padding:
+    7px
+    10px;
+
+  border: 1px solid #d8e2f1;
+
+  border-radius: 9px;
+
+  background: #f8fbff;
+
+  color: var(--blue);
+
+  box-shadow: none;
+
+  font-size: 10px;
+
+  font-weight: 800;
+}
+
+.history-view-btn:hover {
+  transform: translateY(-1px);
+
+  border-color: #b9cceb;
+
+  background: #eff6ff;
+
+  box-shadow:
+    0 5px 12px
+    rgba(
+      37,
+      99,
+      235,
+      0.1
+    );
+}
+
+
+/* ======================================================
+   Empty History
+   ====================================================== */
+
+.history-empty {
+  padding:
+    50px
+    20px;
+
+  text-align: center;
+}
+
+.history-empty svg {
+  margin-bottom: 10px;
+
+  color: #a3afbf;
+}
+
+.history-empty strong {
+  display: block;
+
+  margin-bottom: 5px;
+
+  color: var(--navy);
+}
+
+.history-empty p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+}
+
+
+/* ======================================================
+   Tablet
+   ====================================================== */
+
+@media (
+  max-width: 1180px
+) {
+  .history-toolbar {
+    grid-template-columns:
+      1fr
+      1fr;
+  }
+
+  .history-search {
+    grid-column:
+      1 / -1;
+  }
+
+  .history-row {
+    grid-template-columns:
+      minmax(180px, 1.6fr)
+      minmax(120px, 1fr)
+      90px
+      80px
+      150px
+      75px;
+  }
+}
+
+
+/* ======================================================
+   Mobile / Small Tablet
+   ====================================================== */
+
+@media (
+  max-width: 850px
+) {
+  .history-toolbar {
+    grid-template-columns:
+      1fr;
+  }
+
+  .history-search {
+    grid-column: auto;
+  }
+
+  .history-head {
+    display: none;
+  }
+
+  .history-table {
+    border: 0;
+
+    background: transparent;
+  }
+
+  .history-row {
+    display: block;
+
+    margin-bottom: 12px;
+
+    padding: 16px;
+
+    border:
+      1px solid
+      var(--border);
+
+    border-radius: 14px;
+
+    background: white;
+
+    box-shadow:
+      0 5px 15px
+      rgba(
+        15,
+        23,
+        42,
+        0.04
+      );
+  }
+
+  .history-row:not(.history-head):hover {
+    transform:
+      translateY(-2px);
+  }
+
+  .history-target {
+    margin-bottom: 13px;
+  }
+
+  .history-target strong {
+    white-space: normal;
+  }
+
+  .history-date,
+  .history-score,
+  .history-findings {
+    margin-bottom: 10px;
+  }
+
+  .history-view-btn {
+    width: 100%;
+
+    margin-top: 4px;
+  }
+}
