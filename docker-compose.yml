@@ -2,58 +2,169 @@ services:
 
   web:
     build: ./client
+
     ports:
       - "8081:80"
+
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -q -O /dev/null http://localhost/ || exit 1"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 
   api:
     build: ./server
+
     environment:
       PORT: 5000
       MONGO_URL: mongodb://mongo:27017/webshield
       REDIS_URL: redis://redis:6379
+
       JWT_SECRET: ${JWT_SECRET}
+
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+
       PUBLIC_URL: ${PUBLIC_URL}
+
       SCAN_ALLOWED_HOSTS: lab
+
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_healthy
+
+      redis:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >
+          fetch('http://localhost:5000/api/health')
+          .then(r => {
+            if (!r.ok) process.exit(1);
+            return r.json();
+          })
+          .then(data => {
+            if (!data.ok) process.exit(1);
+          })
+          .catch(() => process.exit(1))
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
 
   worker:
     build:
       context: ./server
       dockerfile: Dockerfile.worker
+
     command:
       - node
       - src/worker.js
+
     environment:
       MONGO_URL: mongodb://mongo:27017/webshield
       REDIS_URL: redis://redis:6379
       SCAN_ALLOWED_HOSTS: lab
+
     depends_on:
-      - mongo
-      - redis
-      - lab
+      mongo:
+        condition: service_healthy
+
+      redis:
+        condition: service_healthy
+
+      lab:
+        condition: service_healthy
+
+    restart: unless-stopped
+
     init: true
+
     ipc: host
+
 
   mongo:
     image: mongo:7
+
     ports:
       - "127.0.0.1:27018:27017"
+
     volumes:
       - mongo_data:/data/db
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "db.adminCommand('ping').ok"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 
   redis:
     image: redis:7-alpine
 
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+
   lab:
     build: ./lab
+
     expose:
       - "4000"
 
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >
+          fetch('http://localhost:4000/')
+          .then(r => {
+            if (!r.ok) process.exit(1);
+          })
+          .catch(() => process.exit(1))
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
 volumes:
+
   mongo_data:

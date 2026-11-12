@@ -1,0 +1,320 @@
+# ======================================================
+# MongoDB Service
+# ======================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: webshield
+  labels:
+    app: mongo
+    app.kubernetes.io/name: mongo
+    app.kubernetes.io/part-of: webshield
+spec:
+  type: ClusterIP
+
+  selector:
+    app: mongo
+
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: 27017
+      protocol: TCP
+
+---
+
+# ======================================================
+# MongoDB StatefulSet
+# ======================================================
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  namespace: webshield
+  labels:
+    app: mongo
+    app.kubernetes.io/name: mongo
+    app.kubernetes.io/part-of: webshield
+spec:
+  serviceName: mongo
+
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: mongo
+
+  template:
+    metadata:
+      labels:
+        app: mongo
+        app.kubernetes.io/name: mongo
+        app.kubernetes.io/part-of: webshield
+
+    spec:
+      containers:
+        - name: mongo
+
+          image: mongo:7
+
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: mongodb
+              containerPort: 27017
+              protocol: TCP
+
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "quit(db.adminCommand('ping').ok ? 0 : 1)"
+
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          livenessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "quit(db.adminCommand('ping').ok ? 0 : 1)"
+
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+
+            limits:
+              cpu: 500m
+              memory: 768Mi
+
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+
+      spec:
+        accessModes:
+          - ReadWriteOnce
+
+        resources:
+          requests:
+            storage: 2Gi
+
+---
+
+# ======================================================
+# Redis Service
+# ======================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: webshield
+  labels:
+    app: redis
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: webshield
+spec:
+  type: ClusterIP
+
+  selector:
+    app: redis
+
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+
+---
+
+# ======================================================
+# Redis Deployment
+# ======================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: webshield
+  labels:
+    app: redis
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: webshield
+spec:
+  replicas: 1
+
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: redis
+
+  template:
+    metadata:
+      labels:
+        app: redis
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: webshield
+
+    spec:
+      containers:
+        - name: redis
+
+          image: redis:7-alpine
+
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 5
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+---
+
+# ======================================================
+# Vulnerable Lab Service
+# ======================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab
+  namespace: webshield
+  labels:
+    app: lab
+    app.kubernetes.io/name: lab
+    app.kubernetes.io/part-of: webshield
+spec:
+  type: ClusterIP
+
+  selector:
+    app: lab
+
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      protocol: TCP
+
+---
+
+# ======================================================
+# Vulnerable Lab Deployment
+# ======================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab
+  namespace: webshield
+  labels:
+    app: lab
+    app.kubernetes.io/name: lab
+    app.kubernetes.io/part-of: webshield
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: lab
+
+  template:
+    metadata:
+      labels:
+        app: lab
+        app.kubernetes.io/name: lab
+        app.kubernetes.io/part-of: webshield
+
+    spec:
+      containers:
+        - name: lab
+
+          image: webshield-lab:local
+
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 4000
+
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 4000
+
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 5
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+            limits:
+              cpu: 250m
+              memory: 256Mi
