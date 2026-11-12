@@ -1,5 +1,7 @@
 import React, {
   useEffect,
+  useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -19,13 +21,15 @@ import {
   Download,
   Activity,
   ArrowLeft,
+  Search,
+  Filter,
 } from "lucide-react";
 
 import "./style.css";
 
 
 // ======================================================
-// API
+// API Helper
 // ======================================================
 
 async function api(
@@ -48,7 +52,6 @@ async function api(
       }
     );
 
-
   const data =
     await response
       .json()
@@ -56,57 +59,51 @@ async function api(
         () => ({})
       );
 
-
-  if (
-    !response.ok
-  ) {
+  if (!response.ok) {
     throw new Error(
       data.error ||
       "Request failed"
     );
   }
 
-
   return data;
 }
 
 
 // ======================================================
-// App
+// Application
 // ======================================================
 
 function App() {
+
+  // ====================================================
+  // Authentication
+  // ====================================================
+
   const [
     user,
     setUser,
-  ] = useState(
-    null
-  );
-
+  ] = useState(null);
 
   const [
     mode,
     setMode,
-  ] = useState(
-    "login"
-  );
-
+  ] = useState("login");
 
   const [
     email,
     setEmail,
-  ] = useState(
-    ""
-  );
-
+  ] = useState("");
 
   const [
     password,
     setPassword,
-  ] = useState(
-    ""
-  );
+  ] = useState("");
 
+
+  // ====================================================
+  // UI
+  // ====================================================
 
   const [
     activeView,
@@ -115,22 +112,33 @@ function App() {
     "dashboard"
   );
 
-
   const [
     error,
     setError,
-  ] = useState(
-    ""
-  );
-
+  ] = useState("");
 
   const [
     busy,
     setBusy,
-  ] = useState(
-    false
-  );
+  ] = useState(false);
 
+
+  // ====================================================
+  // Smooth Scan Details Scroll
+  // ====================================================
+
+  const scanDetailsRef =
+    useRef(null);
+
+  const [
+    scrollRequest,
+    setScrollRequest,
+  ] = useState(0);
+
+
+  // ====================================================
+  // Scanner
+  // ====================================================
 
   const [
     url,
@@ -139,150 +147,253 @@ function App() {
     "http://lab:4000/"
   );
 
-
   const [
     authorized,
     setAuthorized,
-  ] = useState(
-    false
-  );
-
+  ] = useState(false);
 
   const [
     scans,
     setScans,
-  ] = useState(
-    []
-  );
-
+  ] = useState([]);
 
   const [
     selected,
     setSelected,
-  ] = useState(
-    null
-  );
-
+  ] = useState(null);
 
   const [
     liveProgress,
     setLiveProgress,
-  ] = useState(
-    null
-  );
+  ] = useState(null);
 
 
   // ====================================================
-  // Load User + Scans
+  // Finding Filters
+  // ====================================================
+
+  const [
+    findingSearch,
+    setFindingSearch,
+  ] = useState("");
+
+  const [
+    severityFilter,
+    setSeverityFilter,
+  ] = useState("All");
+
+  const [
+    owaspFilter,
+    setOwaspFilter,
+  ] = useState("All");
+
+
+  // ====================================================
+  // Load
   // ====================================================
 
   async function load() {
+
     try {
+
       const currentUser =
         await api(
           "/me"
         );
-
 
       const scanList =
         await api(
           "/scans"
         );
 
-
       setUser(
         currentUser
       );
-
 
       setScans(
         scanList
       );
 
     } catch {
+
       setUser(
         null
       );
+
     }
   }
 
 
   useEffect(
     () => {
+
       load();
+
     },
     []
   );
 
 
   // ====================================================
-  // Polling
+  // Active Scan Detection
+  // ====================================================
+
+  const hasActiveScans =
+    scans.some(
+      (
+        scan
+      ) =>
+        scan.status ===
+          "queued" ||
+        scan.status ===
+          "running"
+    );
+
+
+  // ====================================================
+  // Poll Only While Scan Is Running
   // ====================================================
 
   useEffect(
     () => {
+
       if (
-        !user
+        !user ||
+        !hasActiveScans
+      ) {
+        return;
+      }
+
+
+      const refreshScans =
+        async () => {
+
+          try {
+
+            const items =
+              await api(
+                "/scans"
+              );
+
+            setScans(
+              items
+            );
+
+
+            if (
+              selected?._id
+            ) {
+
+              const current =
+                items.find(
+                  (
+                    scan
+                  ) =>
+                    scan._id ===
+                    selected._id
+                );
+
+              if (current) {
+
+                setSelected(
+                  current
+                );
+
+              }
+            }
+
+          } catch {
+
+            // Ignore temporary polling errors
+
+          }
+        };
+
+
+      const timer =
+        setInterval(
+          refreshScans,
+          4000
+        );
+
+
+      return () => {
+
+        clearInterval(
+          timer
+        );
+
+      };
+
+    },
+
+    [
+      user,
+      hasActiveScans,
+      selected?._id,
+    ]
+  );
+
+
+  // ====================================================
+  // Smooth Scroll To Details
+  //
+  // IMPORTANT:
+  // Runs only when View is explicitly clicked.
+  // It does NOT run on polling/filter changes.
+  // ====================================================
+
+  useEffect(
+    () => {
+
+      if (
+        scrollRequest === 0 ||
+        activeView !==
+          "history" ||
+        !selected?._id
       ) {
         return;
       }
 
 
       const timer =
-        setInterval(
-          async () => {
-            try {
-              const items =
-                await api(
-                  "/scans"
-                );
+        window.setTimeout(
+          () => {
 
+            if (
+              scanDetailsRef.current
+            ) {
 
-              setScans(
-                items
-              );
+              scanDetailsRef
+                .current
+                .scrollIntoView({
+                  behavior:
+                    "smooth",
 
+                  block:
+                    "start",
+                });
 
-              if (
-                selected?._id
-              ) {
-                const current =
-                  items.find(
-                    (
-                      scan
-                    ) =>
-                      scan._id ===
-                      selected._id
-                  );
-
-
-                if (
-                  current
-                ) {
-                  setSelected(
-                    current
-                  );
-                }
-              }
-
-            } catch {
-              // Ignore polling errors
             }
-          },
 
-          3000
+          },
+          120
         );
 
 
       return () => {
-        clearInterval(
+
+        window.clearTimeout(
           timer
         );
+
       };
+
     },
 
     [
-      user,
+      scrollRequest,
+      activeView,
       selected?._id,
     ]
   );
@@ -294,9 +405,8 @@ function App() {
 
   useEffect(
     () => {
-      if (
-        !user
-      ) {
+
+      if (!user) {
         return;
       }
 
@@ -317,15 +427,34 @@ function App() {
 
 
       socket.on(
+        "connect",
+
+        () => {
+
+          console.log(
+            "Socket connected:",
+            socket.id
+          );
+
+        }
+      );
+
+
+      socket.on(
         "scan:progress",
 
-        (
+        async (
           event
         ) => {
+
           setLiveProgress(
             event
           );
 
+
+          // --------------------------------------------
+          // Update history row
+          // --------------------------------------------
 
           setScans(
             (
@@ -335,6 +464,7 @@ function App() {
                 (
                   scan
                 ) => {
+
                   if (
                     scan._id !==
                     event.scanId
@@ -360,15 +490,21 @@ function App() {
                         event.message,
                     },
                   };
+
                 }
               )
           );
 
 
+          // --------------------------------------------
+          // Update selected scan
+          // --------------------------------------------
+
           setSelected(
             (
               current
             ) => {
+
               if (
                 !current ||
                 current._id !==
@@ -395,15 +531,103 @@ function App() {
                     event.message,
                 },
               };
+
             }
           );
+
+
+          // --------------------------------------------
+          // Fetch final complete result once
+          // --------------------------------------------
+
+          if (
+            event.status ===
+              "completed" ||
+            event.status ===
+              "failed"
+          ) {
+
+            try {
+
+              const finalScan =
+                await api(
+                  "/scans/" +
+                  event.scanId
+                );
+
+
+              setScans(
+                (
+                  currentScans
+                ) =>
+                  currentScans.map(
+                    (
+                      scan
+                    ) =>
+                      scan._id ===
+                      event.scanId
+                        ? finalScan
+                        : scan
+                  )
+              );
+
+
+              setSelected(
+                (
+                  current
+                ) => {
+
+                  if (
+                    current?._id ===
+                    event.scanId
+                  ) {
+                    return finalScan;
+                  }
+
+
+                  return current;
+
+                }
+              );
+
+            } catch (
+              refreshError
+            ) {
+
+              console.error(
+                "Final scan refresh failed:",
+                refreshError.message
+              );
+
+            }
+          }
+
+        }
+      );
+
+
+      socket.on(
+        "connect_error",
+
+        (
+          socketError
+        ) => {
+
+          console.error(
+            "Socket error:",
+            socketError.message
+          );
+
         }
       );
 
 
       return () => {
+
         socket.disconnect();
+
       };
+
     },
 
     [
@@ -419,17 +643,17 @@ function App() {
   async function submitAuth(
     event
   ) {
+
     event.preventDefault();
 
-    setError(
-      ""
-    );
+    setError("");
 
 
     try {
+
       await api(
         "/auth/" +
-          mode,
+        mode,
 
         {
           method:
@@ -444,19 +668,18 @@ function App() {
       );
 
 
-      setPassword(
-        ""
-      );
-
+      setPassword("");
 
       await load();
 
     } catch (
       authError
     ) {
+
       setError(
         authError.message
       );
+
     }
   }
 
@@ -468,18 +691,12 @@ function App() {
   async function start(
     event
   ) {
+
     event.preventDefault();
 
+    setBusy(true);
 
-    setBusy(
-      true
-    );
-
-
-    setError(
-      ""
-    );
-
+    setError("");
 
     setLiveProgress(
       null
@@ -487,6 +704,7 @@ function App() {
 
 
     try {
+
       const result =
         await api(
           "/scans",
@@ -507,11 +725,11 @@ function App() {
       const scan =
         await api(
           "/scans/" +
-            result.id
+          result.id
         );
 
 
-      setSelected(
+      openScan(
         scan
       );
 
@@ -534,15 +752,86 @@ function App() {
     } catch (
       scanError
     ) {
+
       setError(
         scanError.message
       );
 
     } finally {
-      setBusy(
-        false
-      );
+
+      setBusy(false);
+
     }
+  }
+
+
+  // ====================================================
+  // Open Scan
+  // ====================================================
+
+  function openScan(
+    scan
+  ) {
+
+    setSelected(
+      scan
+    );
+
+
+    setFindingSearch(
+      ""
+    );
+
+
+    setSeverityFilter(
+      "All"
+    );
+
+
+    setOwaspFilter(
+      "All"
+    );
+
+
+    // Trigger smooth scroll only
+    // because the user explicitly opened a scan.
+
+    setScrollRequest(
+      (
+        current
+      ) =>
+        current +
+        1
+    );
+
+  }
+
+
+  // ====================================================
+  // Close Scan
+  // ====================================================
+
+  function closeScan() {
+
+    setSelected(
+      null
+    );
+
+
+    setFindingSearch(
+      ""
+    );
+
+
+    setSeverityFilter(
+      "All"
+    );
+
+
+    setOwaspFilter(
+      "All"
+    );
+
   }
 
 
@@ -551,6 +840,7 @@ function App() {
   // ====================================================
 
   async function logout() {
+
     await api(
       "/auth/logout",
 
@@ -561,20 +851,13 @@ function App() {
     );
 
 
-    setUser(
-      null
-    );
+    setUser(null);
 
-
-    setSelected(
-      null
-    );
-
+    setSelected(null);
 
     setLiveProgress(
       null
     );
-
 
     setActiveView(
       "dashboard"
@@ -583,155 +866,7 @@ function App() {
 
 
   // ====================================================
-  // Auth UI
-  // ====================================================
-
-  if (
-    !user
-  ) {
-    return (
-      <main className="auth">
-
-        <div className="auth-card">
-
-          <div className="brand">
-            <Shield size={30} />
-
-            WebShield
-          </div>
-
-
-          <h1>
-            Security Scanner
-          </h1>
-
-
-          <p>
-            Sign in to your
-            authorized security
-            assessment workspace.
-          </p>
-
-
-          <form
-            onSubmit={
-              submitAuth
-            }
-          >
-
-            <label>
-              Email
-
-              <input
-                type="email"
-
-                value={
-                  email
-                }
-
-                onChange={
-                  (
-                    event
-                  ) =>
-                    setEmail(
-                      event.target.value
-                    )
-                }
-
-                required
-              />
-            </label>
-
-
-            <label>
-              Password
-
-              <input
-                type="password"
-
-                minLength={8}
-
-                value={
-                  password
-                }
-
-                onChange={
-                  (
-                    event
-                  ) =>
-                    setPassword(
-                      event.target.value
-                    )
-                }
-
-                required
-              />
-            </label>
-
-
-            {
-              error && (
-                <p className="error">
-                  {error}
-                </p>
-              )
-            }
-
-
-            <button
-              type="submit"
-            >
-              {
-                mode ===
-                "login"
-                  ? "Sign In"
-                  : "Create Account"
-              }
-            </button>
-
-          </form>
-
-
-          <a
-            className="google"
-
-            href="/api/auth/google"
-          >
-            Continue with Google
-          </a>
-
-
-          <button
-            type="button"
-
-            className="link"
-
-            onClick={() =>
-              setMode(
-                mode ===
-                  "login"
-                  ? "register"
-                  : "login"
-              )
-            }
-          >
-            {
-              mode ===
-                "login"
-                ? "Create an account"
-                : "Back to sign in"
-            }
-          </button>
-
-        </div>
-
-      </main>
-    );
-  }
-
-
-  // ====================================================
-  // Dashboard Stats
+  // Dashboard Statistics
   // ====================================================
 
   const totalFindings =
@@ -788,12 +923,11 @@ function App() {
         ) =>
           finding.severity ===
           "High"
-      )
-      .length;
+      ).length;
 
 
   // ====================================================
-  // Selected Scan
+  // Selected Scan Statistics
   // ====================================================
 
   const pagesDiscovered =
@@ -874,12 +1008,356 @@ function App() {
 
 
   // ====================================================
+  // Findings
+  // ====================================================
+
+  const selectedFindings =
+    useMemo(
+      () =>
+        selected?.findings ||
+        [],
+
+      [
+        selected,
+      ]
+    );
+
+
+  // ====================================================
+  // OWASP Options
+  // ====================================================
+
+  const owaspOptions =
+    useMemo(
+      () => {
+
+        return [
+          ...new Set(
+            selectedFindings
+              .map(
+                (
+                  finding
+                ) =>
+                  finding.owasp
+              )
+              .filter(
+                Boolean
+              )
+          ),
+        ].sort();
+
+      },
+
+      [
+        selectedFindings,
+      ]
+    );
+
+
+  // ====================================================
+  // OWASP Summary
+  // ====================================================
+
+  const owaspSummary =
+    useMemo(
+      () => {
+
+        const summary =
+          {};
+
+
+        for (
+          const finding
+          of selectedFindings
+        ) {
+
+          const category =
+            finding.owasp ||
+            "Unmapped";
+
+
+          summary[
+            category
+          ] =
+            (
+              summary[
+                category
+              ] ||
+              0
+            ) + 1;
+
+        }
+
+
+        return Object.entries(
+          summary
+        ).sort(
+          (
+            a,
+            b
+          ) =>
+            b[1] -
+            a[1]
+        );
+
+      },
+
+      [
+        selectedFindings,
+      ]
+    );
+
+
+  // ====================================================
+  // Filtered Findings
+  // ====================================================
+
+  const filteredFindings =
+    useMemo(
+      () => {
+
+        const search =
+          findingSearch
+            .trim()
+            .toLowerCase();
+
+
+        return selectedFindings.filter(
+          (
+            finding
+          ) => {
+
+            const matchesSeverity =
+              severityFilter ===
+                "All" ||
+              finding.severity ===
+                severityFilter;
+
+
+            const matchesOwasp =
+              owaspFilter ===
+                "All" ||
+              finding.owasp ===
+                owaspFilter;
+
+
+            const searchableText =
+              [
+                finding.title,
+                finding.code,
+                finding.severity,
+                finding.owasp,
+                finding.url,
+                finding.evidence,
+                finding.remediation,
+              ]
+                .filter(
+                  Boolean
+                )
+                .join(" ")
+                .toLowerCase();
+
+
+            const matchesSearch =
+              !search ||
+              searchableText.includes(
+                search
+              );
+
+
+            return (
+              matchesSeverity &&
+              matchesOwasp &&
+              matchesSearch
+            );
+
+          }
+        );
+
+      },
+
+      [
+        selectedFindings,
+        findingSearch,
+        severityFilter,
+        owaspFilter,
+      ]
+    );
+
+
+  // ====================================================
+  // Login
+  // ====================================================
+
+  if (!user) {
+
+    return (
+
+      <main className="auth">
+
+        <div className="auth-card">
+
+          <div className="brand">
+
+            <Shield
+              size={30}
+            />
+
+            WebShield
+
+          </div>
+
+
+          <h1>
+            Security Scanner
+          </h1>
+
+
+          <p>
+            Sign in to your
+            authorized security
+            assessment workspace.
+          </p>
+
+
+          <form
+            onSubmit={
+              submitAuth
+            }
+          >
+
+            <label>
+
+              Email
+
+              <input
+                type="email"
+
+                value={
+                  email
+                }
+
+                onChange={
+                  (
+                    event
+                  ) =>
+                    setEmail(
+                      event.target.value
+                    )
+                }
+
+                required
+              />
+
+            </label>
+
+
+            <label>
+
+              Password
+
+              <input
+                type="password"
+
+                minLength={8}
+
+                value={
+                  password
+                }
+
+                onChange={
+                  (
+                    event
+                  ) =>
+                    setPassword(
+                      event.target.value
+                    )
+                }
+
+                required
+              />
+
+            </label>
+
+
+            {
+              error && (
+
+                <p className="error">
+                  {error}
+                </p>
+
+              )
+            }
+
+
+            <button
+              type="submit"
+            >
+
+              {
+                mode ===
+                "login"
+                  ? "Sign In"
+                  : "Create Account"
+              }
+
+            </button>
+
+          </form>
+
+
+          <a
+            className="google"
+
+            href="/api/auth/google"
+          >
+            Continue with Google
+          </a>
+
+
+          <button
+            type="button"
+
+            className="link"
+
+            onClick={() =>
+              setMode(
+                mode ===
+                  "login"
+                  ? "register"
+                  : "login"
+              )
+            }
+          >
+
+            {
+              mode ===
+                "login"
+                ? "Create an account"
+                : "Back to sign in"
+            }
+
+          </button>
+
+        </div>
+
+      </main>
+
+    );
+  }
+
+
+  // ====================================================
   // Dashboard
   // ====================================================
 
-  function DashboardView() {
+  function renderDashboardView() {
+
     return (
+
       <>
+
         <header>
 
           <div>
@@ -1055,7 +1533,7 @@ function App() {
 
         {
           scans.length >
-            0 && (
+          0 && (
 
             <section className="panel">
 
@@ -1135,13 +1613,15 @@ function App() {
                             className="link"
 
                             onClick={() => {
-                              setSelected(
-                                scan
-                              );
 
                               setActiveView(
                                 "history"
                               );
+
+                              openScan(
+                                scan
+                              );
+
                             }}
                           >
                             View
@@ -1161,6 +1641,7 @@ function App() {
         }
 
       </>
+
     );
   }
 
@@ -1169,9 +1650,12 @@ function App() {
   // New Scan
   // ====================================================
 
-  function NewScanView() {
+  function renderNewScanView() {
+
     return (
+
       <>
+
         <header>
 
           <div>
@@ -1203,10 +1687,9 @@ function App() {
 
 
           <p>
-            WebShield currently
-            scans the bundled
-            controlled laboratory
-            target.
+            WebShield currently scans
+            the bundled controlled
+            laboratory target.
           </p>
 
 
@@ -1273,11 +1756,13 @@ function App() {
                 busy
               }
             >
+
               {
                 busy
                   ? "Starting Scan..."
                   : "Start Security Scan"
               }
+
             </button>
 
           </form>
@@ -1285,9 +1770,11 @@ function App() {
 
           {
             error && (
+
               <p className="error">
                 {error}
               </p>
+
             )
           }
 
@@ -1357,34 +1844,38 @@ function App() {
           </div>
 
         </section>
+
       </>
+
     );
   }
 
 
   // ====================================================
-  // Comparison Finding List
+  // Comparison List
   // ====================================================
 
-  function ComparisonList({
+  function renderComparisonList(
     title,
-    findings,
-  }) {
+    findings
+  ) {
+
     if (
       !findings ||
       findings.length ===
-        0
+      0
     ) {
       return null;
     }
 
 
     return (
-      <div className="discovery-section">
 
-        <h3>
+      <div className="comparison-list">
+
+        <h4>
           {title}
-        </h3>
+        </h4>
 
 
         {
@@ -1395,7 +1886,7 @@ function App() {
             ) => (
 
               <div
-                className="discovered-item"
+                className="comparison-item"
 
                 key={
                   finding.fingerprint ||
@@ -1404,19 +1895,24 @@ function App() {
               >
 
                 <strong>
-                  {
-                    finding.title
-                  }
+                  {finding.title}
                 </strong>
 
 
-                <p>
-                  Severity:{" "}
+                <span
+                  className={
+                    `severity ${
+                      finding.severity
+                        ?.toLowerCase() ||
+                      ""
+                    }`
+                  }
+                >
                   {
                     finding.severity ||
                     "N/A"
                   }
-                </p>
+                </span>
 
 
                 <p>
@@ -1428,9 +1924,7 @@ function App() {
 
 
                 <small>
-                  {
-                    finding.url
-                  }
+                  {finding.url}
                 </small>
 
               </div>
@@ -1440,6 +1934,7 @@ function App() {
         }
 
       </div>
+
     );
   }
 
@@ -1448,10 +1943,9 @@ function App() {
   // Scan Details
   // ====================================================
 
-  function ScanDetails() {
-    if (
-      !selected
-    ) {
+  function renderScanDetails() {
+
+    if (!selected) {
       return null;
     }
 
@@ -1461,6 +1955,7 @@ function App() {
 
 
     return (
+
       <section className="panel">
 
         <div className="heading">
@@ -1474,9 +1969,7 @@ function App() {
                 `status ${selected.status}`
               }
             >
-              {
-                selected.status
-              }
+              {selected.status}
             </span>
 
           </h2>
@@ -1484,7 +1977,7 @@ function App() {
 
           {
             selected.status ===
-              "completed" && (
+            "completed" && (
 
               <a
                 className="download"
@@ -1493,11 +1986,13 @@ function App() {
                   `/api/scans/${selected._id}/report`
                 }
               >
+
                 <Download
                   size={16}
                 />
 
                 PDF Report
+
               </a>
 
             )
@@ -1614,7 +2109,7 @@ function App() {
         </div>
 
 
-        {/* Score */}
+        {/* Security Score */}
 
         <div className="security-score">
 
@@ -1623,61 +2118,47 @@ function App() {
           </span>
 
           <strong>
+
             {
               selected.securityScore ??
               100
             }
+
             /100
+
           </strong>
 
         </div>
 
 
-        {/* ==================================================
-            Scan Comparison
-            ================================================== */}
+        {/* Comparison */}
 
         {
           selected.status ===
             "completed" &&
           comparison && (
 
-            <div className="discovery-section">
+            <div className="comparison-section">
 
               <h3>
                 Vulnerability Comparison
               </h3>
 
 
-              {
-                comparison.hasPreviousScan
-                  ? (
+              <p>
 
-                    <p>
-                      Compared with the
-                      previous completed
-                      scan of the same
-                      target.
-                    </p>
+                {
+                  comparison.hasPreviousScan
+                    ? "Compared with the previous completed scan of the same target."
+                    : "This scan is the baseline for future vulnerability comparisons."
+                }
 
-                  )
-                  : (
-
-                    <p>
-                      This is the first
-                      completed scan for
-                      this target. All
-                      detected findings
-                      are considered new.
-                    </p>
-
-                  )
-              }
+              </p>
 
 
-              <div className="discovery-grid">
+              <div className="comparison-grid">
 
-                <div className="discovery-card">
+                <div className="comparison-stat">
 
                   <span>
                     New
@@ -1693,7 +2174,7 @@ function App() {
                 </div>
 
 
-                <div className="discovery-card">
+                <div className="comparison-stat">
 
                   <span>
                     Resolved
@@ -1709,7 +2190,7 @@ function App() {
                 </div>
 
 
-                <div className="discovery-card">
+                <div className="comparison-stat">
 
                   <span>
                     Unchanged
@@ -1725,18 +2206,20 @@ function App() {
                 </div>
 
 
-                <div className="discovery-card">
+                <div className="comparison-stat">
 
                   <span>
-                    Comparison
+                    Status
                   </span>
 
                   <strong>
+
                     {
                       comparison.hasPreviousScan
-                        ? "Available"
+                        ? "Compared"
                         : "Baseline"
                     }
+
                   </strong>
 
                 </div>
@@ -1744,47 +2227,31 @@ function App() {
               </div>
 
 
-              <ComparisonList
-                title="New Vulnerabilities"
-
-                findings={
+              {
+                renderComparisonList(
+                  "New Vulnerabilities",
                   comparison.newFindings
-                }
-              />
+                )
+              }
 
 
-              <ComparisonList
-                title="Resolved Vulnerabilities"
-
-                findings={
+              {
+                renderComparisonList(
+                  "Resolved Vulnerabilities",
                   comparison.resolvedFindings
-                }
-              />
+                )
+              }
 
 
-              <ComparisonList
-                title="Unchanged Vulnerabilities"
-
-                findings={
+              {
+                renderComparisonList(
+                  "Unchanged Vulnerabilities",
                   comparison.unchangedFindings
-                }
-              />
+                )
+              }
 
             </div>
 
-          )
-        }
-
-
-        {/* Error */}
-
-        {
-          selected.error && (
-            <p className="error">
-              {
-                selected.error
-              }
-            </p>
           )
         }
 
@@ -1793,7 +2260,7 @@ function App() {
 
         {
           formsFound >
-            0 && (
+          0 && (
 
             <div className="discovery-section">
 
@@ -1821,20 +2288,21 @@ function App() {
                       >
 
                         <strong>
+
                           {
                             form.method
                           }{" "}
+
                           {
                             form.action
                           }
+
                         </strong>
 
 
                         <p>
                           Page:{" "}
-                          {
-                            form.page
-                          }
+                          {form.page}
                         </p>
 
 
@@ -1875,7 +2343,7 @@ function App() {
 
         {
           apiRequestsFound >
-            0 && (
+          0 && (
 
             <div className="discovery-section">
 
@@ -1903,20 +2371,26 @@ function App() {
                       >
 
                         <strong>
+
                           {
                             request.method
                           }{" "}
+
                           {
                             request.url
                           }
+
                         </strong>
 
 
                         <p>
+
                           Resource Type:{" "}
+
                           {
                             request.resourceType
                           }
+
                         </p>
 
                       </div>
@@ -1931,32 +2405,273 @@ function App() {
         }
 
 
+        {/* OWASP */}
+
+        {
+          selectedFindings.length >
+          0 && (
+
+            <div className="owasp-section">
+
+              <h3>
+                OWASP Findings Summary
+              </h3>
+
+
+              <div className="owasp-grid">
+
+                {
+                  owaspSummary.map(
+                    (
+                      [
+                        category,
+                        count,
+                      ]
+                    ) => (
+
+                      <div
+                        className="owasp-card"
+
+                        key={
+                          category
+                        }
+                      >
+
+                        <span>
+                          {category}
+                        </span>
+
+                        <strong>
+                          {count}
+                        </strong>
+
+                      </div>
+
+                    )
+                  )
+                }
+
+              </div>
+
+            </div>
+
+          )
+        }
+
+
         {/* Findings */}
 
         <div className="findings-section">
 
-          <h3>
-            Security Findings
-          </h3>
+          <div className="findings-title-row">
+
+            <div>
+
+              <h3>
+                Security Findings
+              </h3>
+
+
+              <p>
+
+                Showing{" "}
+
+                <strong>
+                  {
+                    filteredFindings.length
+                  }
+                </strong>{" "}
+
+                of{" "}
+
+                <strong>
+                  {
+                    selectedFindings.length
+                  }
+                </strong>{" "}
+
+                findings
+
+              </p>
+
+            </div>
+
+
+            <Filter
+              size={22}
+            />
+
+          </div>
+
+
+          <div className="finding-filters">
+
+            <div className="search-box">
+
+              <Search
+                size={18}
+              />
+
+
+              <input
+                type="text"
+
+                placeholder="Search finding, URL, evidence..."
+
+                value={
+                  findingSearch
+                }
+
+                onChange={
+                  (
+                    event
+                  ) =>
+                    setFindingSearch(
+                      event.target.value
+                    )
+                }
+              />
+
+            </div>
+
+
+            <select
+              value={
+                severityFilter
+              }
+
+              onChange={
+                (
+                  event
+                ) =>
+                  setSeverityFilter(
+                    event.target.value
+                  )
+              }
+            >
+
+              <option value="All">
+                All Severities
+              </option>
+
+              <option value="Critical">
+                Critical
+              </option>
+
+              <option value="High">
+                High
+              </option>
+
+              <option value="Medium">
+                Medium
+              </option>
+
+              <option value="Low">
+                Low
+              </option>
+
+              <option value="Info">
+                Info
+              </option>
+
+            </select>
+
+
+            <select
+              value={
+                owaspFilter
+              }
+
+              onChange={
+                (
+                  event
+                ) =>
+                  setOwaspFilter(
+                    event.target.value
+                  )
+              }
+            >
+
+              <option value="All">
+                All OWASP Categories
+              </option>
+
+
+              {
+                owaspOptions.map(
+                  (
+                    category
+                  ) => (
+
+                    <option
+                      key={
+                        category
+                      }
+
+                      value={
+                        category
+                      }
+                    >
+                      {category}
+                    </option>
+
+                  )
+                )
+              }
+
+            </select>
+
+
+            <button
+              type="button"
+
+              className="secondary"
+
+              onClick={() => {
+
+                setFindingSearch("");
+
+                setSeverityFilter(
+                  "All"
+                );
+
+                setOwaspFilter(
+                  "All"
+                );
+
+              }}
+            >
+              Clear Filters
+            </button>
+
+          </div>
 
 
           {
-            (
-              selected.findings ||
-              []
-            ).length ===
+            filteredFindings.length ===
             0
               ? (
 
-                <p>
-                  No security findings
-                  currently available.
-                </p>
+                <div className="empty-state">
+
+                  <h4>
+                    No findings match
+                    the current filters.
+                  </h4>
+
+
+                  <p>
+                    Clear the filters
+                    to view all scan
+                    findings.
+                  </p>
+
+                </div>
 
               )
               : (
 
-                selected.findings.map(
+                filteredFindings.map(
                   (
                     finding,
                     index
@@ -1973,11 +2688,28 @@ function App() {
 
                       <div className="finding-heading">
 
-                        <b>
+                        <div>
+
+                          <b>
+                            {
+                              finding.title
+                            }
+                          </b>
+
+
                           {
-                            finding.title
+                            finding.code && (
+
+                              <small className="finding-code">
+                                {
+                                  finding.code
+                                }
+                              </small>
+
+                            )
                           }
-                        </b>
+
+                        </div>
 
 
                         <span
@@ -2001,7 +2733,7 @@ function App() {
                       </div>
 
 
-                      <p>
+                      <p className="finding-meta">
 
                         {
                           finding.owasp ||
@@ -2020,9 +2752,13 @@ function App() {
                       </p>
 
 
-                      <small>
-                        {finding.url}
-                      </small>
+                      <div className="finding-url">
+
+                        {
+                          finding.url
+                        }
+
+                      </div>
 
 
                       <p>
@@ -2062,7 +2798,19 @@ function App() {
 
         </div>
 
+
+        {
+          selected.error && (
+
+            <p className="error">
+              {selected.error}
+            </p>
+
+          )
+        }
+
       </section>
+
     );
   }
 
@@ -2071,9 +2819,12 @@ function App() {
   // History
   // ====================================================
 
-  function HistoryView() {
+  function renderHistoryView() {
+
     return (
+
       <>
+
         <header>
 
           <div>
@@ -2107,103 +2858,99 @@ function App() {
 
           {
             scans.length ===
-              0
-                ? (
+            0
+              ? (
 
-                  <p>
-                    No scans available.
-                  </p>
+                <p>
+                  No scans available.
+                </p>
 
-                )
-                : (
+              )
+              : (
 
-                  <div className="table">
+                <div className="table">
 
-                    <div className="tr head">
+                  <div className="tr head">
 
-                      <span>
-                        Target
-                      </span>
+                    <span>
+                      Target
+                    </span>
 
-                      <span>
-                        Status
-                      </span>
+                    <span>
+                      Status
+                    </span>
 
-                      <span>
-                        Findings
-                      </span>
+                    <span>
+                      Findings
+                    </span>
 
-                      <span>
-                        Action
-                      </span>
-
-                    </div>
-
-
-                    {
-                      scans.map(
-                        (
-                          scan
-                        ) => (
-
-                          <div
-                            className="tr"
-
-                            key={
-                              scan._id
-                            }
-                          >
-
-                            <span className="truncate">
-                              {
-                                scan.url
-                              }
-                            </span>
-
-
-                            <span
-                              className={
-                                `status ${scan.status}`
-                              }
-                            >
-                              {
-                                scan.status
-                              }
-                            </span>
-
-
-                            <span>
-                              {
-                                scan.findings
-                                  ?.length ||
-                                0
-                              }
-                            </span>
-
-
-                            <button
-                              type="button"
-
-                              className="link"
-
-                              onClick={() =>
-                                setSelected(
-                                  scan
-                                )
-                              }
-                            >
-                              View
-                            </button>
-
-                          </div>
-
-                        )
-                      )
-                    }
+                    <span>
+                      Action
+                    </span>
 
                   </div>
 
-                )
+
+                  {
+                    scans.map(
+                      (
+                        scan
+                      ) => (
+
+                        <div
+                          className="tr"
+
+                          key={
+                            scan._id
+                          }
+                        >
+
+                          <span className="truncate">
+                            {scan.url}
+                          </span>
+
+
+                          <span
+                            className={
+                              `status ${scan.status}`
+                            }
+                          >
+                            {scan.status}
+                          </span>
+
+
+                          <span>
+                            {
+                              scan.findings
+                                ?.length ||
+                              0
+                            }
+                          </span>
+
+
+                          <button
+                            type="button"
+
+                            className="link"
+
+                            onClick={() =>
+                              openScan(
+                                scan
+                              )
+                            }
+                          >
+                            View
+                          </button>
+
+                        </div>
+
+                      )
+                    )
+                  }
+
+                </div>
+
+              )
           }
 
         </section>
@@ -2212,50 +2959,57 @@ function App() {
         {
           selected && (
 
-            <>
+            <div
+              ref={
+                scanDetailsRef
+              }
+
+              style={{
+                scrollMarginTop:
+                  "24px",
+              }}
+            >
+
               <button
                 type="button"
 
-                className="link"
+                className="back-button"
 
-                onClick={() =>
-                  setSelected(
-                    null
-                  )
+                onClick={
+                  closeScan
                 }
-
-                style={{
-                  marginBottom:
-                    "12px",
-                }}
               >
 
                 <ArrowLeft
                   size={16}
-                />{" "}
+                />
 
                 Close Scan Details
 
               </button>
 
 
-              <ScanDetails />
+              {
+                renderScanDetails()
+              }
 
-            </>
+            </div>
 
           )
         }
 
       </>
+
     );
   }
 
 
   // ====================================================
-  // Main UI
+  // UI
   // ====================================================
 
   return (
+
     <div className="shell">
 
       <aside>
@@ -2269,12 +3023,14 @@ function App() {
         </div>
 
 
-        <div
+        <button
+          type="button"
+
           className={
             activeView ===
-              "dashboard"
-                ? "nav active"
-                : "nav"
+            "dashboard"
+              ? "nav active"
+              : "nav"
           }
 
           onClick={() =>
@@ -2282,11 +3038,6 @@ function App() {
               "dashboard"
             )
           }
-
-          style={{
-            cursor:
-              "pointer",
-          }}
         >
 
           <Activity
@@ -2295,30 +3046,27 @@ function App() {
 
           Dashboard
 
-        </div>
+        </button>
 
 
-        <div
+        <button
+          type="button"
+
           className={
             activeView ===
-              "new-scan"
-                ? "nav active"
-                : "nav"
+            "new-scan"
+              ? "nav active"
+              : "nav"
           }
 
           onClick={() => {
+
             setActiveView(
               "new-scan"
             );
 
-            setError(
-              ""
-            );
-          }}
+            setError("");
 
-          style={{
-            cursor:
-              "pointer",
           }}
         >
 
@@ -2328,15 +3076,17 @@ function App() {
 
           New Scan
 
-        </div>
+        </button>
 
 
-        <div
+        <button
+          type="button"
+
           className={
             activeView ===
-              "history"
-                ? "nav active"
-                : "nav"
+            "history"
+              ? "nav active"
+              : "nav"
           }
 
           onClick={() =>
@@ -2344,11 +3094,6 @@ function App() {
               "history"
             )
           }
-
-          style={{
-            cursor:
-              "pointer",
-          }}
         >
 
           <History
@@ -2357,7 +3102,7 @@ function App() {
 
           Scan History
 
-        </div>
+        </button>
 
 
         <div className="bottom">
@@ -2368,6 +3113,8 @@ function App() {
 
 
           <button
+            type="button"
+
             className="secondary"
 
             onClick={
@@ -2392,30 +3139,28 @@ function App() {
 
         {
           activeView ===
-            "dashboard" && (
-            <DashboardView />
-          )
+            "dashboard" &&
+          renderDashboardView()
         }
 
 
         {
           activeView ===
-            "new-scan" && (
-            <NewScanView />
-          )
+            "new-scan" &&
+          renderNewScanView()
         }
 
 
         {
           activeView ===
-            "history" && (
-            <HistoryView />
-          )
+            "history" &&
+          renderHistoryView()
         }
 
       </main>
 
     </div>
+
   );
 }
 

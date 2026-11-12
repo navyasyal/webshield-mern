@@ -2,13 +2,9 @@ import express from "express";
 import http from "node:http";
 
 import helmet from "helmet";
-
 import cookieParser from "cookie-parser";
-
 import rateLimit from "express-rate-limit";
-
 import bcrypt from "bcryptjs";
-
 import jwt from "jsonwebtoken";
 
 import passport from "passport";
@@ -17,13 +13,15 @@ import {
   Strategy as GoogleStrategy,
 } from "passport-google-oauth20";
 
-import PDFDocument from "pdfkit";
-
-import Redis from "ioredis";
+import IORedis from "ioredis";
 
 import {
-  Server,
+  Server as SocketIOServer,
 } from "socket.io";
+
+import {
+  Queue,
+} from "bullmq";
 
 import {
   connectDb,
@@ -32,16 +30,12 @@ import {
 } from "./db.js";
 
 import {
-  auth,
-  credentials,
-  issueToken,
-  setAuthCookie,
   validateLabUrl,
 } from "./security.js";
 
 import {
-  scanQueue,
-} from "./queue.js";
+  generateProfessionalReport,
+} from "./report.js";
 
 
 // ======================================================
@@ -49,24 +43,58 @@ import {
 // ======================================================
 
 const PORT =
-  process.env.PORT ||
-  5000;
+  Number(
+    process.env.PORT ||
+    5000
+  );
+
 
 const REDIS_URL =
   process.env.REDIS_URL ||
-  "redis://localhost:6379";
+  "redis://redis:6379";
+
+
+const JWT_SECRET =
+  process.env.JWT_SECRET;
+
+
+const GOOGLE_CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID;
+
+
+const GOOGLE_CLIENT_SECRET =
+  process.env.GOOGLE_CLIENT_SECRET;
+
 
 const PUBLIC_URL =
   process.env.PUBLIC_URL ||
   "http://localhost:8081";
 
 
+const JWT_ISSUER =
+  "webshield";
+
+
+const SCAN_PROGRESS_CHANNEL =
+  "webshield:scan-progress";
+
+
+if (
+  !JWT_SECRET
+) {
+  throw new Error(
+    "JWT_SECRET is required"
+  );
+}
+
+
 // ======================================================
-// Express + HTTP
+// Express / HTTP / Socket.IO
 // ======================================================
 
 const app =
   express();
+
 
 const server =
   http.createServer(
@@ -74,12 +102,8 @@ const server =
   );
 
 
-// ======================================================
-// Socket.IO
-// ======================================================
-
 const io =
-  new Server(
+  new SocketIOServer(
     server,
     {
       path:
@@ -97,18 +121,38 @@ const io =
 
 
 // ======================================================
-// Redis
+// Redis / BullMQ
 // ======================================================
 
-const cache =
-  new Redis(
+const cacheRedis =
+  new IORedis(
     REDIS_URL
   );
 
 
 const progressSubscriber =
-  new Redis(
+  new IORedis(
     REDIS_URL
+  );
+
+
+const queueConnection =
+  new IORedis(
+    REDIS_URL,
+    {
+      maxRetriesPerRequest:
+        null,
+    }
+  );
+
+
+const scanQueue =
+  new Queue(
+    "scans",
+    {
+      connection:
+        queueConnection,
+    }
   );
 
 
@@ -123,10 +167,8 @@ app.disable(
 
 app.use(
   helmet({
-    crossOriginResourcePolicy: {
-      policy:
-        "same-origin",
-    },
+    contentSecurityPolicy:
+      false,
   })
 );
 
@@ -134,7 +176,15 @@ app.use(
 app.use(
   express.json({
     limit:
-      "20kb",
+      "1mb",
+  })
+);
+
+
+app.use(
+  express.urlencoded({
+    extended:
+      false,
   })
 );
 
@@ -150,27 +200,63 @@ app.use(
 
 
 // ======================================================
-// CSRF / Origin Protection
+// Authentication Rate Limit
 // ======================================================
 
+const authLimiter =
+  rateLimit({
+    windowMs:
+      15 *
+      60 *
+      1000,
+
+    max:
+      100,
+
+    standardHeaders:
+      true,
+
+    legacyHeaders:
+      false,
+
+    message: {
+      error:
+        "Too many authentication requests. Please try again later.",
+    },
+  });
+
+
 app.use(
+  "/api/auth",
+  authLimiter
+);
+
+
+// ======================================================
+// Origin Protection
+// ======================================================
+
+const publicOrigin =
+  new URL(
+    PUBLIC_URL
+  ).origin;
+
+
+app.use(
+  "/api",
+
   (
     req,
     res,
     next
   ) => {
 
-    const protectedMethods =
-      [
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-      ];
-
-
     if (
-      !protectedMethods.includes(
+      [
+        "GET",
+        "HEAD",
+        "OPTIONS",
+      ].includes(
         req.method
       )
     ) {
@@ -184,40 +270,17 @@ app.use(
       );
 
 
-    let allowedOrigin;
-
-
-    try {
-
-      allowedOrigin =
-        new URL(
-          PUBLIC_URL
-        ).origin;
-
-    } catch {
-
-      return res
-        .status(500)
-        .json({
-          error:
-            "Invalid PUBLIC_URL configuration",
-        });
-    }
-
-
     if (
       origin &&
       origin !==
-        allowedOrigin
+        publicOrigin
     ) {
-
       return res
         .status(403)
         .json({
           error:
-            "Cross-site request blocked",
+            "Invalid request origin",
         });
-
     }
 
 
@@ -227,76 +290,343 @@ app.use(
 
 
 // ======================================================
-// Authentication Rate Limiter
+// JWT
 // ======================================================
 
-const authLimiter =
-  rateLimit({
-    windowMs:
-      15 *
-      60 *
-      1000,
+function createToken(
+  user
+) {
+  return jwt.sign(
+    {
+      email:
+        user.email,
 
-    limit:
-      30,
-
-    standardHeaders:
-      "draft-7",
-
-    legacyHeaders:
-      false,
-
-    message: {
-      error:
-        "Too many authentication attempts",
+      role:
+        user.role,
     },
-  });
+
+    JWT_SECRET,
+
+    {
+      subject:
+        user._id.toString(),
+
+      issuer:
+        JWT_ISSUER,
+
+      expiresIn:
+        "7d",
+    }
+  );
+}
 
 
-app.use(
-  "/api/auth",
-  authLimiter
-);
+function setAuthCookie(
+  res,
+  token
+) {
+  res.cookie(
+    "ws_token",
+    token,
+    {
+      httpOnly:
+        true,
+
+      sameSite:
+        "lax",
+
+      secure:
+        PUBLIC_URL.startsWith(
+          "https://"
+        ),
+
+      maxAge:
+        7 *
+        24 *
+        60 *
+        60 *
+        1000,
+
+      path:
+        "/",
+    }
+  );
+}
+
+
+function clearAuthCookie(
+  res
+) {
+  res.clearCookie(
+    "ws_token",
+    {
+      httpOnly:
+        true,
+
+      sameSite:
+        "lax",
+
+      secure:
+        PUBLIC_URL.startsWith(
+          "https://"
+        ),
+
+      path:
+        "/",
+    }
+  );
+}
+
+
+// ======================================================
+// Auth Middleware
+// ======================================================
+
+async function requireAuth(
+  req,
+  res,
+  next
+) {
+  try {
+
+    const token =
+      req.cookies
+        ?.ws_token;
+
+
+    if (!token) {
+      return res
+        .status(401)
+        .json({
+          error:
+            "Authentication required",
+        });
+    }
+
+
+    const payload =
+      jwt.verify(
+        token,
+        JWT_SECRET,
+        {
+          issuer:
+            JWT_ISSUER,
+        }
+      );
+
+
+    const user =
+      await User.findById(
+        payload.sub
+      );
+
+
+    if (!user) {
+
+      clearAuthCookie(
+        res
+      );
+
+
+      return res
+        .status(401)
+        .json({
+          error:
+            "User account not found",
+        });
+    }
+
+
+    req.user =
+      user;
+
+
+    next();
+
+  } catch {
+
+    clearAuthCookie(
+      res
+    );
+
+
+    return res
+      .status(401)
+      .json({
+        error:
+          "Invalid or expired session",
+      });
+  }
+}
+
+
+// ======================================================
+// Google OAuth
+// ======================================================
+
+if (
+  GOOGLE_CLIENT_ID &&
+  GOOGLE_CLIENT_SECRET
+) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID:
+          GOOGLE_CLIENT_ID,
+
+        clientSecret:
+          GOOGLE_CLIENT_SECRET,
+
+        callbackURL:
+          `${PUBLIC_URL}/api/auth/google/callback`,
+      },
+
+      async (
+        accessToken,
+        refreshToken,
+        profile,
+        done
+      ) => {
+
+        try {
+
+          const email =
+            profile.emails
+              ?.find(
+                (
+                  item
+                ) =>
+                  item.verified !==
+                  false
+              )
+              ?.value
+              ?.toLowerCase()
+              ?.trim() ||
+            profile.emails
+              ?.[0]
+              ?.value
+              ?.toLowerCase()
+              ?.trim();
+
+
+          if (!email) {
+            return done(
+              new Error(
+                "Google account does not provide an email address"
+              )
+            );
+          }
+
+
+          let user =
+            await User.findOne({
+              googleId:
+                profile.id,
+            });
+
+
+          if (!user) {
+            user =
+              await User.findOne({
+                email,
+              });
+          }
+
+
+          if (user) {
+
+            if (
+              !user.googleId
+            ) {
+              user.googleId =
+                profile.id;
+            }
+
+
+            if (
+              !user.name &&
+              profile.displayName
+            ) {
+              user.name =
+                profile.displayName;
+            }
+
+
+            await user.save();
+
+          } else {
+
+            user =
+              await User.create({
+                name:
+                  profile.displayName ||
+                  "",
+
+                email,
+
+                googleId:
+                  profile.id,
+
+                role:
+                  "user",
+              });
+          }
+
+
+          return done(
+            null,
+            user
+          );
+
+        } catch (
+          error
+        ) {
+
+          return done(
+            error
+          );
+
+        }
+      }
+    )
+  );
+}
 
 
 // ======================================================
 // Socket Cookie Parser
 // ======================================================
 
-function parseSocketCookies(
+function parseCookies(
   cookieHeader = ""
 ) {
-
-  const cookies = {};
+  const cookies =
+    {};
 
 
   for (
-    const part of
-    cookieHeader.split(";")
+    const part
+    of cookieHeader.split(
+      ";"
+    )
   ) {
 
-    const item =
-      part.trim();
-
-
-    if (!item) {
-      continue;
-    }
-
-
     const separator =
-      item.indexOf("=");
+      part.indexOf(
+        "="
+      );
 
 
     if (
-      separator === -1
+      separator ===
+      -1
     ) {
       continue;
     }
 
 
     const key =
-      item
+      part
         .slice(
           0,
           separator
@@ -304,25 +634,35 @@ function parseSocketCookies(
         .trim();
 
 
-    const rawValue =
-      item
+    const value =
+      part
         .slice(
-          separator + 1
+          separator +
+            1
         )
         .trim();
 
 
+    if (!key) {
+      continue;
+    }
+
+
     try {
 
-      cookies[key] =
+      cookies[
+        key
+      ] =
         decodeURIComponent(
-          rawValue
+          value
         );
 
     } catch {
 
-      cookies[key] =
-        rawValue;
+      cookies[
+        key
+      ] =
+        value;
 
     }
   }
@@ -337,7 +677,7 @@ function parseSocketCookies(
 // ======================================================
 
 io.use(
-  (
+  async (
     socket,
     next
   ) => {
@@ -345,8 +685,9 @@ io.use(
     try {
 
       const cookies =
-        parseSocketCookies(
-          socket.handshake
+        parseCookies(
+          socket
+            .handshake
             .headers
             .cookie ||
           ""
@@ -358,49 +699,54 @@ io.use(
 
 
       if (!token) {
-
         return next(
           new Error(
             "Authentication required"
           )
         );
-
       }
 
 
       const payload =
         jwt.verify(
           token,
-          process.env
-            .JWT_SECRET,
+          JWT_SECRET,
           {
             issuer:
-              "webshield",
+              JWT_ISSUER,
           }
         );
 
 
-      socket.userId =
-        payload.sub;
+      const user =
+        await User.findById(
+          payload.sub
+        );
+
+
+      if (!user) {
+        return next(
+          new Error(
+            "User not found"
+          )
+        );
+      }
+
+
+      socket.user =
+        user;
 
 
       next();
 
-    } catch (
-      error
-    ) {
-
-      console.error(
-        "Socket authentication failed:",
-        error.message
-      );
-
+    } catch {
 
       next(
         new Error(
-          "Authentication failed"
+          "Invalid session"
         )
       );
+
     }
   }
 );
@@ -412,26 +758,35 @@ io.use(
 
 io.on(
   "connection",
+
   (
     socket
   ) => {
 
-    console.log(
-      `Socket connected: ${socket.userId}`
-    );
+    const userId =
+      socket
+        .user
+        ._id
+        .toString();
 
 
     socket.join(
-      `user:${socket.userId}`
+      `user:${userId}`
+    );
+
+
+    console.log(
+      `Socket connected: ${userId}`
     );
 
 
     socket.on(
       "disconnect",
+
       () => {
 
         console.log(
-          `Socket disconnected: ${socket.userId}`
+          `Socket disconnected: ${userId}`
         );
 
       }
@@ -441,16 +796,17 @@ io.on(
 
 
 // ======================================================
-// Redis Progress Subscriber
+// Redis Scan Progress
 // ======================================================
 
 await progressSubscriber.subscribe(
-  "webshield:scan-progress"
+  SCAN_PROGRESS_CHANNEL
 );
 
 
 progressSubscriber.on(
   "message",
+
   async (
     channel,
     message
@@ -458,7 +814,7 @@ progressSubscriber.on(
 
     if (
       channel !==
-      "webshield:scan-progress"
+      SCAN_PROGRESS_CHANNEL
     ) {
       return;
     }
@@ -479,7 +835,7 @@ progressSubscriber.on(
       }
 
 
-      await cache.del(
+      await cacheRedis.del(
         `scans:${event.owner}`
       );
 
@@ -498,7 +854,7 @@ progressSubscriber.on(
     ) {
 
       console.error(
-        "Progress event error:",
+        "Progress subscriber error:",
         error.message
       );
 
@@ -526,8 +882,12 @@ app.get(
       application:
         "WebShield",
 
+      service:
+        "API",
+
       timestamp:
-        new Date(),
+        new Date()
+          .toISOString(),
     });
   }
 );
@@ -548,13 +908,46 @@ app.post(
 
     try {
 
-      const {
-        email,
-        password,
-      } =
-        credentials.parse(
-          req.body
+      const email =
+        String(
+          req.body.email ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
+
+
+      const password =
+        String(
+          req.body.password ||
+          ""
         );
+
+
+      if (
+        !email ||
+        !password
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Email and password are required",
+          });
+      }
+
+
+      if (
+        password.length <
+        8
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Password must be at least 8 characters",
+          });
+      }
 
 
       const existing =
@@ -563,15 +956,12 @@ app.post(
         });
 
 
-      if (
-        existing
-      ) {
-
+      if (existing) {
         return res
           .status(409)
           .json({
             error:
-              "Account already exists",
+              "An account with this email already exists",
           });
       }
 
@@ -586,12 +976,16 @@ app.post(
       const user =
         await User.create({
           email,
+
           passwordHash,
+
+          role:
+            "user",
         });
 
 
       const token =
-        issueToken(
+        createToken(
           user
         );
 
@@ -622,6 +1016,7 @@ app.post(
       next(
         error
       );
+
     }
   }
 );
@@ -642,12 +1037,19 @@ app.post(
 
     try {
 
-      const {
-        email,
-        password,
-      } =
-        credentials.parse(
-          req.body
+      const email =
+        String(
+          req.body.email ||
+          ""
+        )
+          .trim()
+          .toLowerCase();
+
+
+      const password =
+        String(
+          req.body.password ||
+          ""
         );
 
 
@@ -661,7 +1063,6 @@ app.post(
         !user ||
         !user.passwordHash
       ) {
-
         return res
           .status(401)
           .json({
@@ -679,7 +1080,6 @@ app.post(
 
 
       if (!valid) {
-
         return res
           .status(401)
           .json({
@@ -690,7 +1090,7 @@ app.post(
 
 
       const token =
-        issueToken(
+        createToken(
           user
         );
 
@@ -719,6 +1119,7 @@ app.post(
       next(
         error
       );
+
     }
   }
 );
@@ -736,23 +1137,8 @@ app.post(
     res
   ) => {
 
-    res.clearCookie(
-      "ws_token",
-      {
-        path:
-          "/",
-
-        httpOnly:
-          true,
-
-        sameSite:
-          "strict",
-
-        secure:
-          process.env
-            .NODE_ENV ===
-          "production",
-      }
+    clearAuthCookie(
+      res
     );
 
 
@@ -771,175 +1157,55 @@ app.post(
 app.get(
   "/api/me",
 
-  auth,
+  requireAuth,
 
-  async (
+  (
     req,
     res
   ) => {
 
-    const user =
-      await User
-        .findById(
-          req.user
-        )
-        .select(
-          "name email role"
-        );
+    res.json({
+      id:
+        req.user._id,
 
+      name:
+        req.user.name,
 
-    if (!user) {
+      email:
+        req.user.email,
 
-      return res
-        .status(404)
-        .json({
-          error:
-            "User not found",
-        });
-    }
-
-
-    res.json(
-      user
-    );
+      role:
+        req.user.role,
+    });
   }
 );
 
 
 // ======================================================
-// Google OAuth
+// Google Login
 // ======================================================
 
-const googleEnabled =
-  Boolean(
-    process.env
-      .GOOGLE_CLIENT_ID &&
-    process.env
-      .GOOGLE_CLIENT_SECRET
-  );
+app.get(
+  "/api/auth/google",
 
+  (
+    req,
+    res,
+    next
+  ) => {
 
-if (
-  googleEnabled
-) {
+    if (
+      !GOOGLE_CLIENT_ID ||
+      !GOOGLE_CLIENT_SECRET
+    ) {
+      return res
+        .status(503)
+        .json({
+          error:
+            "Google OAuth is not configured",
+        });
+    }
 
-  passport.use(
-    new GoogleStrategy(
-      {
-        clientID:
-          process.env
-            .GOOGLE_CLIENT_ID,
-
-        clientSecret:
-          process.env
-            .GOOGLE_CLIENT_SECRET,
-
-        callbackURL:
-          `${PUBLIC_URL}/api/auth/google/callback`,
-      },
-
-      async (
-        accessToken,
-        refreshToken,
-        profile,
-        done
-      ) => {
-
-        try {
-
-          const email =
-            profile.emails?.[0]
-              ?.value
-              ?.toLowerCase();
-
-
-          if (!email) {
-
-            return done(
-              new Error(
-                "Google account has no email"
-              )
-            );
-          }
-
-
-          let user =
-            await User.findOne({
-              googleId:
-                profile.id,
-            });
-
-
-          if (!user) {
-
-            const existing =
-              await User.findOne({
-                email,
-              });
-
-
-            if (
-              existing
-            ) {
-
-              existing.googleId =
-                profile.id;
-
-
-              if (
-                !existing.name
-              ) {
-
-                existing.name =
-                  profile
-                    .displayName ||
-                  "";
-              }
-
-
-              await existing.save();
-
-              user =
-                existing;
-
-            } else {
-
-              user =
-                await User.create({
-                  name:
-                    profile
-                      .displayName ||
-                    "",
-
-                  email,
-
-                  googleId:
-                    profile.id,
-                });
-            }
-          }
-
-
-          done(
-            null,
-            user
-          );
-
-        } catch (
-          error
-        ) {
-
-          done(
-            error
-          );
-        }
-      }
-    )
-  );
-
-
-  app.get(
-    "/api/auth/google",
 
     passport.authenticate(
       "google",
@@ -952,64 +1218,106 @@ if (
         session:
           false,
       }
-    )
-  );
+    )(
+      req,
+      res,
+      next
+    );
+  }
+);
 
 
-  app.get(
-    "/api/auth/google/callback",
+// ======================================================
+// Google Callback
+// ======================================================
+
+app.get(
+  "/api/auth/google/callback",
+
+  (
+    req,
+    res,
+    next
+  ) => {
+
+    if (
+      !GOOGLE_CLIENT_ID ||
+      !GOOGLE_CLIENT_SECRET
+    ) {
+      return res.redirect(
+        `${PUBLIC_URL}/?auth=google-not-configured`
+      );
+    }
+
 
     passport.authenticate(
       "google",
+
       {
         session:
           false,
 
         failureRedirect:
-          "/?google=failed",
-      }
-    ),
+          `${PUBLIC_URL}/?auth=google-failed`,
+      },
 
-    (
-      req,
-      res
-    ) => {
+      (
+        error,
+        user
+      ) => {
 
-      const token =
-        issueToken(
-          req.user
+        if (
+          error ||
+          !user
+        ) {
+
+          console.error(
+            "Google OAuth error:",
+            error?.message ||
+            "No user"
+          );
+
+
+          return res.redirect(
+            `${PUBLIC_URL}/?auth=google-failed`
+          );
+        }
+
+
+        const token =
+          createToken(
+            user
+          );
+
+
+        setAuthCookie(
+          res,
+          token
         );
 
 
-      setAuthCookie(
-        res,
-        token
-      );
-
-
-      res.redirect(
-        "/"
-      );
-    }
-  );
-
-} else {
-
-  app.get(
-    "/api/auth/google",
-
-    (
+        return res.redirect(
+          PUBLIC_URL
+        );
+      }
+    )(
       req,
-      res
-    ) => {
+      res,
+      next
+    );
+  }
+);
 
-      res
-        .status(503)
-        .json({
-          error:
-            "Google OAuth is not configured",
-        });
-    }
+
+// ======================================================
+// Scan Cache
+// ======================================================
+
+async function clearUserScanCache(
+  userId
+) {
+  await cacheRedis.del(
+    `scans:${userId}`
   );
 }
 
@@ -1021,7 +1329,7 @@ if (
 app.get(
   "/api/scans",
 
-  auth,
+  requireAuth,
 
   async (
     req,
@@ -1031,20 +1339,23 @@ app.get(
 
     try {
 
+      const owner =
+        req.user
+          ._id
+          .toString();
+
+
       const cacheKey =
-        `scans:${req.user}`;
+        `scans:${owner}`;
 
 
       const cached =
-        await cache.get(
+        await cacheRedis.get(
           cacheKey
         );
 
 
-      if (
-        cached
-      ) {
-
+      if (cached) {
         return res.json(
           JSON.parse(
             cached
@@ -1057,25 +1368,20 @@ app.get(
         await Scan
           .find({
             owner:
-              req.user,
+              req.user._id,
           })
           .sort({
             createdAt:
               -1,
           })
-          .limit(
-            50
-          )
           .lean();
 
 
-      await cache.set(
+      await cacheRedis.set(
         cacheKey,
-
         JSON.stringify(
           scans
         ),
-
         "EX",
         5
       );
@@ -1092,54 +1398,58 @@ app.get(
       next(
         error
       );
+
     }
   }
 );
 
 
 // ======================================================
-// Start Scan
+// Create Scan
 // ======================================================
 
 app.post(
   "/api/scans",
 
-  auth,
+  requireAuth,
 
   async (
     req,
-    res
+    res,
+    next
   ) => {
 
     try {
 
       if (
-        req.body
-          .authorized !==
+        req.body.authorized !==
         true
       ) {
-
         return res
           .status(400)
           .json({
             error:
-              "You must confirm authorization to test this target",
+              "You must confirm authorization before starting a scan",
           });
       }
 
 
-      const url =
+      const target =
         validateLabUrl(
-          req.body.url
+          String(
+            req.body.url ||
+            ""
+          )
         );
 
 
       const scan =
         await Scan.create({
           owner:
-            req.user,
+            req.user._id,
 
-          url,
+          url:
+            target,
 
           status:
             "queued",
@@ -1157,39 +1467,55 @@ app.post(
             message:
               "Waiting for scanner worker",
           },
+
+          pages:
+            [],
+
+          discovery: {
+            forms:
+              [],
+
+            apiRequests:
+              [],
+          },
+
+          findings:
+            [],
+
+          securityScore:
+            100,
         });
 
 
-      await cache.del(
-        `scans:${req.user}`
-      );
-
-
       await scanQueue.add(
-        "scan",
+        "security-scan",
 
         {
-          id:
-            String(
-              scan._id
-            ),
+          scanId:
+            scan._id.toString(),
         },
 
         {
           jobId:
-            String(
-              scan._id
-            ),
+            scan._id.toString(),
 
-          attempts:
-            1,
+          removeOnComplete: {
+            count:
+              100,
+          },
 
-          removeOnComplete:
-            100,
-
-          removeOnFail:
-            100,
+          removeOnFail: {
+            count:
+              100,
+          },
         }
+      );
+
+
+      await clearUserScanCache(
+        req.user
+          ._id
+          .toString()
       );
 
 
@@ -1200,220 +1526,141 @@ app.post(
             scan._id,
 
           status:
-            "queued",
+            scan.status,
         });
 
     } catch (
       error
     ) {
 
-      res
-        .status(400)
-        .json({
-          error:
-            error.message,
-        });
+      next(
+        error
+      );
+
     }
   }
 );
 
 
 // ======================================================
-// Individual Scan
+// Get Individual Scan
 // ======================================================
 
 app.get(
   "/api/scans/:id",
 
-  auth,
+  requireAuth,
 
   async (
     req,
-    res
+    res,
+    next
   ) => {
 
-    const scan =
-      await Scan.findOne({
-        _id:
-          req.params.id,
+    try {
 
-        owner:
-          req.user,
-      });
+      const scan =
+        await Scan.findOne({
+          _id:
+            req.params.id,
 
-
-    if (!scan) {
-
-      return res
-        .status(404)
-        .json({
-          error:
-            "Scan not found",
+          owner:
+            req.user._id,
         });
+
+
+      if (!scan) {
+        return res
+          .status(404)
+          .json({
+            error:
+              "Scan not found",
+          });
+      }
+
+
+      res.json(
+        scan
+      );
+
+    } catch (
+      error
+    ) {
+
+      next(
+        error
+      );
+
     }
-
-
-    res.json(
-      scan
-    );
   }
 );
 
 
 // ======================================================
-// PDF Report
+// Professional PDF Report
 // ======================================================
 
 app.get(
   "/api/scans/:id/report",
 
-  auth,
+  requireAuth,
 
   async (
     req,
-    res
+    res,
+    next
   ) => {
 
-    const scan =
-      await Scan.findOne({
-        _id:
-          req.params.id,
+    try {
 
-        owner:
-          req.user,
-      });
+      const scan =
+        await Scan.findOne({
+          _id:
+            req.params.id,
 
-
-    if (!scan) {
-
-      return res
-        .status(404)
-        .json({
-          error:
-            "Scan not found",
+          owner:
+            req.user._id,
         });
-    }
 
 
-    res.type(
-      "application/pdf"
-    );
+      if (!scan) {
+        return res
+          .status(404)
+          .json({
+            error:
+              "Scan not found",
+          });
+      }
 
 
-    res.setHeader(
-      "Content-Disposition",
-
-      `attachment; filename="webshield-report-${scan._id}.pdf"`
-    );
-
-
-    const pdf =
-      new PDFDocument({
-        margin:
-          50,
-      });
-
-
-    pdf.pipe(
-      res
-    );
+      if (
+        scan.status !==
+        "completed"
+      ) {
+        return res
+          .status(409)
+          .json({
+            error:
+              "PDF report is available only after the scan is completed",
+          });
+      }
 
 
-    pdf
-      .fontSize(22)
-      .text(
-        "WebShield Security Assessment"
+      generateProfessionalReport(
+        scan,
+        req.user,
+        res
       );
 
-
-    pdf.moveDown();
-
-
-    pdf
-      .fontSize(10)
-      .text(
-        `Target: ${scan.url}`
-      )
-      .text(
-        `Status: ${scan.status}`
-      )
-      .text(
-        `Security Score: ${scan.securityScore ?? 100}/100`
-      )
-      .text(
-        `Pages Discovered: ${scan.pages?.length || 0}`
-      )
-      .text(
-        `Forms Discovered: ${scan.discovery?.forms?.length || 0}`
-      )
-      .text(
-        `API Requests: ${scan.discovery?.apiRequests?.length || 0}`
-      )
-      .text(
-        `Total Findings: ${scan.findings?.length || 0}`
-      );
-
-
-    pdf.moveDown();
-
-
-    pdf
-      .fontSize(16)
-      .text(
-        "Security Findings"
-      );
-
-
-    if (
-      !scan.findings?.length
+    } catch (
+      error
     ) {
 
-      pdf
-        .moveDown()
-        .fontSize(10)
-        .text(
-          "No findings detected."
-        );
+      next(
+        error
+      );
+
     }
-
-
-    for (
-      const finding of
-      scan.findings ||
-      []
-    ) {
-
-      pdf.moveDown();
-
-
-      pdf
-        .fontSize(12)
-        .text(
-          `${finding.title} - ${finding.severity}`
-        );
-
-
-      pdf
-        .fontSize(9)
-        .text(
-          `OWASP: ${finding.owasp || "N/A"}`
-        )
-        .text(
-          `Confidence: ${finding.confidence || "N/A"}`
-        )
-        .text(
-          `URL: ${finding.url || scan.url}`
-        )
-        .text(
-          `Evidence: ${finding.evidence || "N/A"}`
-        )
-        .text(
-          `Remediation: ${finding.remediation || "N/A"}`
-        );
-    }
-
-
-    pdf.end();
   }
 );
 
@@ -1441,7 +1688,7 @@ app.use(
 
 
 // ======================================================
-// Error Handler
+// Global Error Handler
 // ======================================================
 
 app.use(
@@ -1453,21 +1700,42 @@ app.use(
   ) => {
 
     console.error(
-      "API Error:",
+      "API error:",
       error
     );
 
 
     if (
-      error.name ===
-      "ZodError"
+      res.headersSent
     ) {
+      return next(
+        error
+      );
+    }
 
+
+    if (
+      error?.name ===
+      "CastError"
+    ) {
       return res
         .status(400)
         .json({
           error:
-            "Invalid input",
+            "Invalid identifier",
+        });
+    }
+
+
+    if (
+      error?.code ===
+      11000
+    ) {
+      return res
+        .status(409)
+        .json({
+          error:
+            "Duplicate record",
         });
     }
 
@@ -1476,56 +1744,29 @@ app.use(
       .status(500)
       .json({
         error:
-          "Request failed",
+          error?.message ||
+          "Internal server error",
       });
   }
 );
 
 
 // ======================================================
-// Start Server
+// Start API
 // ======================================================
 
-async function startServer() {
+await connectDb();
 
-  try {
 
-    await connectDb();
+server.listen(
+  PORT,
+  "0.0.0.0",
 
+  () => {
 
     console.log(
-      "MongoDB connected"
+      `WebShield API + Socket.IO ready on port ${PORT}`
     );
 
-
-    server.listen(
-      PORT,
-      "0.0.0.0",
-
-      () => {
-
-        console.log(
-          `WebShield API + Socket.IO ready on port ${PORT}`
-        );
-
-      }
-    );
-
-  } catch (
-    error
-  ) {
-
-    console.error(
-      "Server startup failed:",
-      error
-    );
-
-
-    process.exit(
-      1
-    );
   }
-}
-
-
-await startServer();
+);
