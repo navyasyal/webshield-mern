@@ -1,0 +1,177 @@
+# ======================================================
+# WebShield API Service
+# ======================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: webshield
+  labels:
+    app: api
+    app.kubernetes.io/name: webshield-api
+    app.kubernetes.io/part-of: webshield
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app: api
+
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP
+
+---
+
+# ======================================================
+# WebShield API Deployment
+# ======================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: webshield
+  labels:
+    app: api
+    app.kubernetes.io/name: webshield-api
+    app.kubernetes.io/part-of: webshield
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: api
+
+  strategy:
+    type: RollingUpdate
+
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app: api
+        app.kubernetes.io/name: webshield-api
+        app.kubernetes.io/part-of: webshield
+
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: api
+          image: webshield-api:local
+          imagePullPolicy: Never
+
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: webshield-config
+
+            - secretRef:
+                name: webshield-secrets
+
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: 5000
+
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 30
+
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 5000
+
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 5000
+
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+---
+
+# ======================================================
+# WebShield Scanner Worker Deployment
+# ======================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: webshield
+  labels:
+    app: worker
+    app.kubernetes.io/name: webshield-worker
+    app.kubernetes.io/part-of: webshield
+
+spec:
+  replicas: 1
+
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: worker
+
+  template:
+    metadata:
+      labels:
+        app: worker
+        app.kubernetes.io/name: webshield-worker
+        app.kubernetes.io/part-of: webshield
+
+    spec:
+      terminationGracePeriodSeconds: 45
+
+      containers:
+        - name: worker
+          image: webshield-worker:local
+          imagePullPolicy: Never
+
+          command:
+            - node
+            - src/worker.js
+
+          envFrom:
+            - configMapRef:
+                name: webshield-config
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+
+            limits:
+              cpu: "1"
+              memory: 1536Mi
