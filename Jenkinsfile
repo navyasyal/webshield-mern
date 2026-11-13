@@ -3,10 +3,6 @@ pipeline {
     agent any
 
 
-    // ==================================================
-    // Global Environment
-    // ==================================================
-
     environment {
 
         KUBECONFIG = 'C:/ProgramData/Jenkins/.jenkins/kube/config'
@@ -19,10 +15,6 @@ pipeline {
         LAB_IMAGE = 'webshield-lab'
     }
 
-
-    // ==================================================
-    // Pipeline Options
-    // ==================================================
 
     options {
 
@@ -44,9 +36,9 @@ pipeline {
     stages {
 
 
-        // ==============================================
+        // ==================================================
         // Checkout
-        // ==============================================
+        // ==================================================
 
         stage('Checkout Source') {
 
@@ -63,15 +55,13 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Environment Validation
-        // ==============================================
+        // ==================================================
+        // Environment
+        // ==================================================
 
         stage('Validate Environment') {
 
             steps {
-
-                echo 'Checking Jenkins build environment...'
 
                 bat 'node --version'
 
@@ -90,15 +80,13 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Install Server Dependencies
-        // ==============================================
+        // ==================================================
+        // Dependencies
+        // ==================================================
 
         stage('Install Server Dependencies') {
 
             steps {
-
-                echo 'Installing backend dependencies...'
 
                 bat '''
                 if exist server\\package-lock.json (
@@ -113,15 +101,9 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Install Client Dependencies
-        // ==============================================
-
         stage('Install Client Dependencies') {
 
             steps {
-
-                echo 'Installing frontend dependencies...'
 
                 bat '''
                 if exist client\\package-lock.json (
@@ -136,15 +118,13 @@ pipeline {
         }
 
 
-        // ==============================================
+        // ==================================================
         // Source Validation
-        // ==============================================
+        // ==================================================
 
         stage('Validate Source') {
 
             steps {
-
-                echo 'Validating WebShield Node.js source files...'
 
                 bat 'node --check server/src/index.js'
 
@@ -165,15 +145,13 @@ pipeline {
         }
 
 
-        // ==============================================
+        // ==================================================
         // Unit Tests
-        // ==============================================
+        // ==================================================
 
         stage('Unit Tests') {
 
             steps {
-
-                echo 'Running WebShield security unit tests...'
 
                 bat '''
                 node --test tests/security.unit.test.mjs
@@ -182,15 +160,13 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Frontend Build
-        // ==============================================
+        // ==================================================
+        // React Build
+        // ==================================================
 
         stage('Frontend Build') {
 
             steps {
-
-                echo 'Building React frontend...'
 
                 bat '''
                 cd client
@@ -200,16 +176,13 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Docker Build
-        // ==============================================
+        // ==================================================
+        // Docker Images
+        // ==================================================
 
         stage('Build Docker Images') {
 
             steps {
-
-                echo "Building WebShield Docker images for build ${BUILD_NUMBER}..."
-
 
                 bat '''
                 docker build ^
@@ -246,86 +219,51 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Docker Image Verification
-        // ==============================================
+        // ==================================================
+        // Verify Images
+        // ==================================================
 
         stage('Verify Docker Images') {
 
             steps {
 
-                echo 'Verifying generated Docker images...'
+                bat 'docker image inspect %API_IMAGE%:%BUILD_NUMBER%'
 
+                bat 'docker image inspect %WORKER_IMAGE%:%BUILD_NUMBER%'
 
-                bat '''
-                docker image inspect %API_IMAGE%:%BUILD_NUMBER%
-                '''
+                bat 'docker image inspect %LAB_IMAGE%:%BUILD_NUMBER%'
 
-
-                bat '''
-                docker image inspect %WORKER_IMAGE%:%BUILD_NUMBER%
-                '''
-
-
-                bat '''
-                docker image inspect %LAB_IMAGE%:%BUILD_NUMBER%
-                '''
-
-
-                bat '''
-                docker image inspect %WEB_IMAGE%:%BUILD_NUMBER%
-                '''
+                bat 'docker image inspect %WEB_IMAGE%:%BUILD_NUMBER%'
             }
         }
 
 
-        // ==============================================
-        // Kubernetes Configuration
-        // ==============================================
+        // ==================================================
+        // Kubernetes Manifests
+        // ==================================================
 
         stage('Apply Kubernetes Configuration') {
 
             steps {
 
-                echo 'Applying Kubernetes manifests...'
+                bat 'kubectl apply -f k8s/00-namespace-config.yaml'
 
+                bat 'kubectl apply -f k8s/01-infrastructure.yaml'
 
-                bat '''
-                kubectl apply ^
-                  -f k8s/00-namespace-config.yaml
-                '''
+                bat 'kubectl apply -f k8s/02-api-worker.yaml'
 
-
-                bat '''
-                kubectl apply ^
-                  -f k8s/01-infrastructure.yaml
-                '''
-
-
-                bat '''
-                kubectl apply ^
-                  -f k8s/02-api-worker.yaml
-                '''
-
-
-                bat '''
-                kubectl apply ^
-                  -f k8s/03-web.yaml
-                '''
+                bat 'kubectl apply -f k8s/03-web.yaml'
             }
         }
 
 
-        // ==============================================
-        // Kubernetes Release
-        // ==============================================
+        // ==================================================
+        // Release
+        // ==================================================
 
         stage('Deploy Release') {
 
             steps {
-
-                echo "Deploying WebShield build ${BUILD_NUMBER}..."
-
 
                 bat '''
                 kubectl set image ^
@@ -361,16 +299,13 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Rollout Verification
-        // ==============================================
+        // ==================================================
+        // Rollout
+        // ==================================================
 
         stage('Verify Kubernetes Rollout') {
 
             steps {
-
-                echo 'Waiting for Kubernetes deployments...'
-
 
                 bat '''
                 kubectl rollout status ^
@@ -406,16 +341,13 @@ pipeline {
         }
 
 
-        // ==============================================
+        // ==================================================
         // API Smoke Test
-        // ==============================================
+        // ==================================================
 
         stage('API Smoke Test') {
 
             steps {
-
-                echo 'Checking deployed WebShield API health...'
-
 
                 bat '''
                 kubectl exec ^
@@ -427,16 +359,34 @@ pipeline {
         }
 
 
-        // ==============================================
-        // Final Kubernetes Verification
-        // ==============================================
+        // ==================================================
+        // FULL INTEGRATION TEST
+        // ==================================================
+
+        stage('Full Integration Test') {
+
+            steps {
+
+                echo 'Running complete WebShield Kubernetes integration test...'
+
+
+                bat '''
+                powershell ^
+                  -NoProfile ^
+                  -ExecutionPolicy Bypass ^
+                  -File tests\\run-k8s-integration.ps1
+                '''
+            }
+        }
+
+
+        // ==================================================
+        // Deployment Summary
+        // ==================================================
 
         stage('Deployment Summary') {
 
             steps {
-
-                echo 'WebShield deployment summary:'
-
 
                 bat '''
                 kubectl get pods ^
@@ -467,7 +417,7 @@ pipeline {
 
 
     // ==================================================
-    // Post Actions
+    // Post
     // ==================================================
 
     post {
@@ -475,12 +425,14 @@ pipeline {
         success {
 
             echo '=========================================='
-            echo 'WEBShield CI/CD PIPELINE SUCCESSFUL'
+            echo 'WEBSHIELD CI/CD PIPELINE SUCCESSFUL'
             echo "Build Number: ${BUILD_NUMBER}"
-            echo 'Tests: PASSED'
+            echo 'Unit Tests: PASSED'
+            echo 'Frontend Build: PASSED'
             echo 'Docker Images: BUILT'
             echo 'Kubernetes Deployment: SUCCESSFUL'
-            echo 'API Health Check: PASSED'
+            echo 'API Smoke Test: PASSED'
+            echo 'Full Integration Test: PASSED'
             echo '=========================================='
         }
 
@@ -488,9 +440,9 @@ pipeline {
         failure {
 
             echo '=========================================='
-            echo 'WEBShield CI/CD PIPELINE FAILED'
+            echo 'WEBSHIELD CI/CD PIPELINE FAILED'
             echo "Build Number: ${BUILD_NUMBER}"
-            echo 'Check the failed pipeline stage above.'
+            echo 'Check the failed stage above.'
             echo '=========================================='
 
 

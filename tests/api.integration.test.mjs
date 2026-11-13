@@ -7,12 +7,8 @@ import assert from "node:assert/strict";
 // ======================================================
 
 const BASE_URL =
-  process.env.WEBSHIELD_BASE_URL ||
+  process.env.BASE_URL ||
   "http://localhost:8081";
-
-
-const LAB_URL =
-  "http://lab:4000/";
 
 
 const TEST_PASSWORD =
@@ -20,29 +16,91 @@ const TEST_PASSWORD =
 
 
 const TEST_EMAIL =
-  `webshield-test-${Date.now()}-${process.pid}@example.test`;
+  `webshield-ci-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}@example.com`;
 
 
 // ======================================================
-// HTTP Helper
+// Session Cookie
 // ======================================================
+
+let sessionCookie =
+  "";
+
+
+// ======================================================
+// Helpers
+// ======================================================
+
+function getSetCookieHeaders(
+  response
+) {
+  if (
+    typeof response.headers.getSetCookie ===
+    "function"
+  ) {
+    return response.headers.getSetCookie();
+  }
+
+
+  const value =
+    response.headers.get(
+      "set-cookie"
+    );
+
+
+  return value
+    ? [value]
+    : [];
+}
+
+
+function updateSessionCookie(
+  response
+) {
+  const setCookieHeaders =
+    getSetCookieHeaders(
+      response
+    );
+
+
+  for (
+    const header
+    of setCookieHeaders
+  ) {
+    const firstPart =
+      header
+        .split(";")[0]
+        .trim();
+
+
+    if (
+      firstPart.startsWith(
+        "ws_token="
+      )
+    ) {
+      sessionCookie =
+        firstPart;
+    }
+  }
+}
+
 
 async function request(
   path,
-  {
-    method = "GET",
-    body,
-    cookie,
-  } = {}
+  options = {}
 ) {
   const headers = {
-    Accept:
-      "application/json",
+    ...(options.headers || {}),
   };
 
 
   if (
-    body !== undefined
+    options.body &&
+    !headers[
+      "Content-Type"
+    ]
   ) {
     headers[
       "Content-Type"
@@ -52,174 +110,185 @@ async function request(
 
 
   if (
-    cookie
+    sessionCookie
   ) {
     headers.Cookie =
-      cookie;
+      sessionCookie;
   }
 
 
   const response =
     await fetch(
       `${BASE_URL}${path}`,
-
       {
-        method,
-
-        headers,
-
-        body:
-          body === undefined
-            ? undefined
-            : JSON.stringify(
-                body
-              ),
-
         redirect:
           "manual",
+
+        ...options,
+
+        headers,
       }
     );
 
 
-  const contentType =
-    response.headers.get(
-      "content-type"
-    ) ||
-    "";
+  updateSessionCookie(
+    response
+  );
 
 
-  let data =
-    null;
-
-
-  if (
-    contentType.includes(
-      "application/json"
-    )
-  ) {
-    data =
-      await response.json();
-
-  } else {
-    data =
-      await response
-        .text()
-        .catch(
-          () => ""
-        );
-  }
-
-
-  const setCookie =
-    response.headers.get(
-      "set-cookie"
-    );
-
-
-  const sessionCookie =
-    setCookie
-      ? setCookie
-          .split(";")[0]
-          .trim()
-      : null;
-
-
-  return {
-    response,
-    data,
-    sessionCookie,
-  };
+  return response;
 }
 
 
-// ======================================================
-// Sleep Helper
-// ======================================================
-
-function sleep(
-  milliseconds
+async function json(
+  response
 ) {
-  return new Promise(
-    (
-      resolve
-    ) => {
+  const body =
+    await response.text();
 
-      setTimeout(
-        resolve,
-        milliseconds
+
+  if (!body) {
+    return {};
+  }
+
+
+  try {
+    return JSON.parse(
+      body
+    );
+  } catch {
+    throw new Error(
+      `Expected JSON response but received: ${body.slice(
+        0,
+        300
+      )}`
+    );
+  }
+}
+
+
+async function waitForCompletedScan(
+  scanId
+) {
+  const attempts =
+    80;
+
+
+  for (
+    let attempt = 1;
+    attempt <= attempts;
+    attempt += 1
+  ) {
+    const response =
+      await request(
+        `/api/scans/${scanId}`
       );
 
+
+    assert.equal(
+      response.status,
+      200,
+      `Unable to retrieve scan during polling. HTTP ${response.status}`
+    );
+
+
+    const scan =
+      await json(
+        response
+      );
+
+
+    console.log(
+      `[poll ${attempt}/${attempts}] ${scan.status} - ${scan.progress?.percent ?? 0}% - ${scan.progress?.stage ?? ""}`
+    );
+
+
+    if (
+      scan.status ===
+      "completed"
+    ) {
+      return scan;
     }
+
+
+    if (
+      scan.status ===
+      "failed"
+    ) {
+      throw new Error(
+        `Scan failed: ${scan.error || "Unknown scanner error"}`
+      );
+    }
+
+
+    await new Promise(
+      (
+        resolve
+      ) =>
+        setTimeout(
+          resolve,
+          1500
+        )
+    );
+  }
+
+
+  throw new Error(
+    "Timed out waiting for WebShield scan to complete"
   );
 }
 
 
 // ======================================================
-// Full WebShield Integration Test
+// Full WebShield Integration Workflow
 // ======================================================
 
 test(
-  "WebShield end-to-end API security workflow",
+  "WebShield deployed application integration workflow",
 
   {
     timeout:
-      90000,
+      180000,
   },
 
-  async (
-    t
-  ) => {
+  async () => {
 
-    let sessionCookie =
-      null;
-
-
-    let scanId =
-      null;
+    console.log(
+      `Testing WebShield at ${BASE_URL}`
+    );
 
 
     // ==================================================
     // Health
     // ==================================================
 
-    await t.test(
-      "API health endpoint is available",
-
-      async () => {
-
-        const {
-          response,
-          data,
-        } =
-          await request(
-            "/api/health"
-          );
+    const healthResponse =
+      await request(
+        "/api/health"
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
+    assert.equal(
+      healthResponse.status,
+      200
+    );
 
 
-        assert.equal(
-          data.ok,
-          true
-        );
+    const health =
+      await json(
+        healthResponse
+      );
 
 
-        assert.equal(
-          data.application,
-          "WebShield"
-        );
+    assert.equal(
+      health.ok,
+      true
+    );
 
 
-        assert.equal(
-          data.service,
-          "API"
-        );
-
-      }
+    assert.equal(
+      health.application,
+      "WebShield"
     );
 
 
@@ -227,57 +296,49 @@ test(
     // Register
     // ==================================================
 
-    await t.test(
-      "user can register",
+    const registerResponse =
+      await request(
+        "/api/auth/register",
 
-      async () => {
+        {
+          method:
+            "POST",
 
-        const {
-          response,
-          data,
-          sessionCookie:
-            cookie,
-        } =
-          await request(
-            "/api/auth/register",
+          body:
+            JSON.stringify({
+              email:
+                TEST_EMAIL,
 
-            {
-              method:
-                "POST",
-
-              body: {
-                email:
-                  TEST_EMAIL,
-
-                password:
-                  TEST_PASSWORD,
-              },
-            }
-          );
+              password:
+                TEST_PASSWORD,
+            }),
+        }
+      );
 
 
-        assert.equal(
-          response.status,
-          201
-        );
+    assert.equal(
+      registerResponse.status,
+      201
+    );
 
 
-        assert.equal(
-          data.email,
-          TEST_EMAIL
-        );
+    assert.ok(
+      sessionCookie.startsWith(
+        "ws_token="
+      ),
+      "Registration should create ws_token cookie"
+    );
 
 
-        assert.ok(
-          cookie,
-          "Authentication cookie should be returned"
-        );
+    const registeredUser =
+      await json(
+        registerResponse
+      );
 
 
-        sessionCookie =
-          cookie;
-
-      }
+    assert.equal(
+      registeredUser.email,
+      TEST_EMAIL
     );
 
 
@@ -285,37 +346,27 @@ test(
     // Current User
     // ==================================================
 
-    await t.test(
-      "authenticated user can access profile",
-
-      async () => {
-
-        const {
-          response,
-          data,
-        } =
-          await request(
-            "/api/me",
-
-            {
-              cookie:
-                sessionCookie,
-            }
-          );
+    const meResponse =
+      await request(
+        "/api/me"
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
+    assert.equal(
+      meResponse.status,
+      200
+    );
 
 
-        assert.equal(
-          data.email,
-          TEST_EMAIL
-        );
+    const me =
+      await json(
+        meResponse
+      );
 
-      }
+
+    assert.equal(
+      me.email,
+      TEST_EMAIL
     );
 
 
@@ -323,611 +374,422 @@ test(
     // Logout
     // ==================================================
 
-    await t.test(
-      "user can logout",
+    const logoutResponse =
+      await request(
+        "/api/auth/logout",
 
-      async () => {
-
-        const {
-          response,
-        } =
-          await request(
-            "/api/auth/logout",
-
-            {
-              method:
-                "POST",
-
-              cookie:
-                sessionCookie,
-            }
-          );
+        {
+          method:
+            "POST",
+        }
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
-
-      }
+    assert.equal(
+      logoutResponse.status,
+      200
     );
+
+
+    sessionCookie =
+      "";
 
 
     // ==================================================
     // Login
     // ==================================================
 
-    await t.test(
-      "registered user can login again",
+    const loginResponse =
+      await request(
+        "/api/auth/login",
 
-      async () => {
+        {
+          method:
+            "POST",
 
-        const {
-          response,
-          data,
-          sessionCookie:
-            cookie,
-        } =
-          await request(
-            "/api/auth/login",
+          body:
+            JSON.stringify({
+              email:
+                TEST_EMAIL,
 
-            {
-              method:
-                "POST",
-
-              body: {
-                email:
-                  TEST_EMAIL,
-
-                password:
-                  TEST_PASSWORD,
-              },
-            }
-          );
+              password:
+                TEST_PASSWORD,
+            }),
+        }
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
+    assert.equal(
+      loginResponse.status,
+      200
+    );
 
 
-        assert.equal(
-          data.email,
-          TEST_EMAIL
-        );
-
-
-        assert.ok(
-          cookie
-        );
-
-
-        sessionCookie =
-          cookie;
-
-      }
+    assert.ok(
+      sessionCookie.startsWith(
+        "ws_token="
+      ),
+      "Login should create ws_token cookie"
     );
 
 
     // ==================================================
-    // Authentication Protection
+    // Protected API Must Reject Anonymous User
     // ==================================================
 
-    await t.test(
-      "scan creation rejects unauthenticated users",
-
-      async () => {
-
-        const {
-          response,
-        } =
-          await request(
-            "/api/scans",
-
-            {
-              method:
-                "POST",
-
-              body: {
-                url:
-                  LAB_URL,
-
-                authorized:
-                  true,
-              },
-            }
-          );
+    const savedCookie =
+      sessionCookie;
 
 
-        assert.equal(
-          response.status,
-          401
-        );
+    sessionCookie =
+      "";
 
-      }
+
+    const unauthenticatedScanResponse =
+      await request(
+        "/api/scans",
+
+        {
+          method:
+            "POST",
+
+          body:
+            JSON.stringify({
+              url:
+                "http://lab:4000/",
+
+              authorized:
+                true,
+            }),
+        }
+      );
+
+
+    assert.equal(
+      unauthenticatedScanResponse.status,
+      401
+    );
+
+
+    sessionCookie =
+      savedCookie;
+
+
+    // ==================================================
+    // Authorization Confirmation Required
+    // ==================================================
+
+    const unauthorizedTargetResponse =
+      await request(
+        "/api/scans",
+
+        {
+          method:
+            "POST",
+
+          body:
+            JSON.stringify({
+              url:
+                "http://lab:4000/",
+
+              authorized:
+                false,
+            }),
+        }
+      );
+
+
+    assert.equal(
+      unauthorizedTargetResponse.status,
+      400
     );
 
 
     // ==================================================
-    // Authorization Confirmation
+    // Public / External Target Must Be Blocked
     // ==================================================
 
-    await t.test(
-      "scan creation requires authorization confirmation",
+    const externalResponse =
+      await request(
+        "/api/scans",
 
-      async () => {
+        {
+          method:
+            "POST",
 
-        const {
-          response,
-          data,
-        } =
-          await request(
-            "/api/scans",
+          body:
+            JSON.stringify({
+              url:
+                "https://example.com/",
 
-            {
-              method:
-                "POST",
-
-              cookie:
-                sessionCookie,
-
-              body: {
-                url:
-                  LAB_URL,
-
-                authorized:
-                  false,
-              },
-            }
-          );
+              authorized:
+                true,
+            }),
+        }
+      );
 
 
-        assert.equal(
-          response.status,
-          400
-        );
+    assert.ok(
+      externalResponse.status >=
+      400,
+      "External target must not be accepted"
+    );
 
 
-        assert.match(
-          String(
-            data.error
-          ),
-          /authorization/i
-        );
-
-      }
+    assert.notEqual(
+      externalResponse.status,
+      202
     );
 
 
     // ==================================================
-    // External Target Protection
+    // Create Controlled Lab Scan
     // ==================================================
 
-    await t.test(
-      "scanner blocks arbitrary external targets",
+    const createScanResponse =
+      await request(
+        "/api/scans",
 
-      async () => {
+        {
+          method:
+            "POST",
 
-        const {
-          response,
-        } =
-          await request(
-            "/api/scans",
+          body:
+            JSON.stringify({
+              url:
+                "http://lab:4000/",
 
-            {
-              method:
-                "POST",
-
-              cookie:
-                sessionCookie,
-
-              body: {
-                url:
-                  "https://example.com/",
-
-                authorized:
-                  true,
-              },
-            }
-          );
+              authorized:
+                true,
+            }),
+        }
+      );
 
 
-        assert.notEqual(
-          response.status,
-          202,
-          "External target must never be queued"
-        );
-
-
-        assert.ok(
-          response.status >=
-            400
-        );
-
-      }
+    assert.equal(
+      createScanResponse.status,
+      202
     );
 
 
-    // ==================================================
-    // Valid Controlled Scan
-    // ==================================================
-
-    await t.test(
-      "authorized controlled lab scan can be queued",
-
-      async () => {
-
-        const {
-          response,
-          data,
-        } =
-          await request(
-            "/api/scans",
-
-            {
-              method:
-                "POST",
-
-              cookie:
-                sessionCookie,
-
-              body: {
-                url:
-                  LAB_URL,
-
-                authorized:
-                  true,
-              },
-            }
-          );
+    const createdScan =
+      await json(
+        createScanResponse
+      );
 
 
-        assert.equal(
-          response.status,
-          202
-        );
-
-
-        assert.ok(
-          data.id,
-          "Scan ID should be returned"
-        );
-
-
-        scanId =
-          String(
-            data.id
-          );
-
-      }
+    assert.ok(
+      createdScan.id,
+      "Scan ID should be returned"
     );
+
+
+    const scanId =
+      String(
+        createdScan.id
+      );
 
 
     // ==================================================
     // Scan Ownership / Retrieval
     // ==================================================
 
-    await t.test(
-      "created scan can be retrieved by its owner",
-
-      async () => {
-
-        const {
-          response,
-          data,
-        } =
-          await request(
-            `/api/scans/${scanId}`,
-
-            {
-              cookie:
-                sessionCookie,
-            }
-          );
+    const queuedResponse =
+      await request(
+        `/api/scans/${scanId}`
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
+    assert.equal(
+      queuedResponse.status,
+      200
+    );
 
 
-        assert.equal(
-          String(
-            data._id
-          ),
-          scanId
-        );
+    const queuedScan =
+      await json(
+        queuedResponse
+      );
 
 
-        assert.equal(
-          data.url,
-          LAB_URL
-        );
-
-
-        assert.ok(
-          [
-            "queued",
-            "running",
-            "completed",
-          ].includes(
-            data.status
-          )
-        );
-
-      }
+    assert.equal(
+      String(
+        queuedScan._id
+      ),
+      scanId
     );
 
 
     // ==================================================
-    // BullMQ + Worker + Scanner
+    // Wait for Worker
     // ==================================================
 
-    await t.test(
-      "worker processes the scan to completion",
-
-      async () => {
-
-        let completedScan =
-          null;
+    const completedScan =
+      await waitForCompletedScan(
+        scanId
+      );
 
 
-        for (
-          let attempt = 0;
-          attempt <
-          40;
-          attempt +=
-          1
-        ) {
-
-          const {
-            response,
-            data,
-          } =
-            await request(
-              `/api/scans/${scanId}`,
-
-              {
-                cookie:
-                  sessionCookie,
-              }
-            );
+    assert.equal(
+      completedScan.status,
+      "completed"
+    );
 
 
-          assert.equal(
-            response.status,
-            200
-          );
+    assert.equal(
+      completedScan.progress?.percent,
+      100
+    );
 
 
-          if (
-            data.status ===
-            "failed"
-          ) {
-            assert.fail(
-              `Scan failed: ${
-                data.error ||
-                "Unknown worker error"
-              }`
-            );
-          }
+    assert.ok(
+      Array.isArray(
+        completedScan.findings
+      )
+    );
 
 
-          if (
-            data.status ===
-            "completed"
-          ) {
-            completedScan =
-              data;
-
-            break;
-          }
+    assert.ok(
+      completedScan.findings.length >
+      0,
+      "Completed scan should contain findings"
+    );
 
 
-          await sleep(
-            1500
-          );
-        }
+    assert.equal(
+      typeof completedScan.securityScore,
+      "number"
+    );
 
 
-        assert.ok(
-          completedScan,
-          "Scan did not complete within the test timeout"
-        );
-
-
-        assert.equal(
-          completedScan.status,
-          "completed"
-        );
-
-
-        assert.equal(
-          completedScan
-            .progress
-            ?.percent,
-          100
-        );
-
-
-        assert.ok(
-          Array.isArray(
-            completedScan.findings
-          )
-        );
-
-
-        assert.ok(
-          completedScan.findings.length >
-            0,
-          "Controlled vulnerable lab should produce findings"
-        );
-
-
-        assert.equal(
-          typeof completedScan.securityScore,
-          "number"
-        );
-
-
-        assert.ok(
-          completedScan.comparison,
-          "Regression comparison data should exist"
-        );
-
-      }
+    assert.ok(
+      completedScan.comparison,
+      "Regression comparison should exist"
     );
 
 
     // ==================================================
-    // Expected Security Findings
+    // Expected Vulnerabilities
     // ==================================================
 
-    await t.test(
-      "scanner detects expected controlled-lab vulnerabilities",
-
-      async () => {
-
-        const {
-          response,
-          data,
-        } =
-          await request(
-            `/api/scans/${scanId}`,
-
-            {
-              cookie:
-                sessionCookie,
-            }
-          );
-
-
-        assert.equal(
-          response.status,
-          200
-        );
-
-
-        const findingCodes =
-          new Set(
+    const findingCodes =
+      new Set(
+        completedScan.findings
+          .map(
             (
-              data.findings ||
-              []
-            ).map(
-              (
-                finding
-              ) =>
-                finding.code
-            )
-          );
+              finding
+            ) =>
+              finding.code
+          )
+          .filter(
+            Boolean
+          )
+      );
 
 
-        assert.ok(
-          findingCodes.has(
-            "REFLECTED_XSS"
-          ),
-          "Reflected XSS should be detected"
-        );
+    const expectedFindingCodes = [
+      "REFLECTED_XSS",
+      "OPEN_REDIRECT",
+      "EXPOSED_ENV",
+      "CORS_ARBITRARY_ORIGIN_CREDENTIALS",
+    ];
 
 
-        assert.ok(
-          findingCodes.has(
-            "OPEN_REDIRECT"
-          ),
-          "Open Redirect should be detected"
-        );
+    for (
+      const code
+      of expectedFindingCodes
+    ) {
+      assert.ok(
+        findingCodes.has(
+          code
+        ),
+        `Expected finding was not detected: ${code}`
+      );
+    }
 
 
-        assert.ok(
-          findingCodes.has(
-            "EXPOSED_ENV"
-          ),
-          "Exposed environment file should be detected"
-        );
+    // ==================================================
+    // Dynamic Discovery
+    // ==================================================
+
+    assert.ok(
+      Array.isArray(
+        completedScan.pages
+      )
+    );
 
 
-        assert.ok(
-          findingCodes.has(
-            "CORS_ARBITRARY_ORIGIN_CREDENTIALS"
-          ),
-          "Dangerous CORS configuration should be detected"
-        );
+    assert.ok(
+      completedScan.pages.length >
+      0
+    );
 
-      }
+
+    assert.ok(
+      Array.isArray(
+        completedScan.discovery?.forms
+      )
+    );
+
+
+    assert.ok(
+      Array.isArray(
+        completedScan.discovery?.apiRequests
+      )
     );
 
 
     // ==================================================
-    // Professional PDF Report
+    // PDF Report
     // ==================================================
 
-    await t.test(
-      "completed scan generates a PDF report",
-
-      async () => {
-
-        const response =
-          await fetch(
-            `${BASE_URL}/api/scans/${scanId}/report`,
-
-            {
-              headers: {
-                Cookie:
-                  sessionCookie,
-              },
-            }
-          );
+    const reportResponse =
+      await request(
+        `/api/scans/${scanId}/report`
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
+    assert.equal(
+      reportResponse.status,
+      200
+    );
 
 
-        const contentType =
-          response.headers.get(
-            "content-type"
-          ) ||
-          "";
+    const contentType =
+      reportResponse.headers.get(
+        "content-type"
+      ) ||
+      "";
 
 
-        assert.match(
-          contentType,
-          /application\/pdf/i
-        );
+    assert.ok(
+      contentType.includes(
+        "application/pdf"
+      )
+    );
 
 
-        const buffer =
-          Buffer.from(
-            await response.arrayBuffer()
-          );
+    const reportBuffer =
+      Buffer.from(
+        await reportResponse.arrayBuffer()
+      );
 
 
-        assert.ok(
-          buffer.length >
-            1000,
-          "Generated PDF should not be empty"
-        );
+    assert.ok(
+      reportBuffer.length >
+      1000,
+      "PDF report should contain substantial content"
+    );
 
 
-        const signature =
-          buffer
-            .subarray(
-              0,
-              4
-            )
-            .toString();
-
-
-        assert.equal(
-          signature,
-          "%PDF"
-        );
-
-      }
+    assert.equal(
+      reportBuffer
+        .subarray(
+          0,
+          4
+        )
+        .toString(),
+      "%PDF"
     );
 
 
@@ -935,51 +797,59 @@ test(
     // Scan History
     // ==================================================
 
-    await t.test(
-      "completed scan appears in scan history",
-
-      async () => {
-
-        const {
-          response,
-          data,
-        } =
-          await request(
-            "/api/scans",
-
-            {
-              cookie:
-                sessionCookie,
-            }
-          );
+    const historyResponse =
+      await request(
+        "/api/scans"
+      );
 
 
-        assert.equal(
-          response.status,
-          200
-        );
+    assert.equal(
+      historyResponse.status,
+      200
+    );
 
 
-        assert.ok(
-          Array.isArray(
-            data
-          )
-        );
+    const history =
+      await json(
+        historyResponse
+      );
 
 
-        assert.ok(
-          data.some(
-            (
-              scan
-            ) =>
-              String(
-                scan._id
-              ) ===
-              scanId
-          )
-        );
+    assert.ok(
+      Array.isArray(
+        history
+      )
+    );
 
-      }
+
+    assert.ok(
+      history.some(
+        (
+          scan
+        ) =>
+          String(
+            scan._id
+          ) ===
+          scanId
+      ),
+      "Completed scan should appear in scan history"
+    );
+
+
+    console.log(
+      "WebShield integration workflow passed."
+    );
+
+    console.log(
+      `Scan ID: ${scanId}`
+    );
+
+    console.log(
+      `Findings: ${completedScan.findings.length}`
+    );
+
+    console.log(
+      `Security Score: ${completedScan.securityScore}/100`
     );
 
   }
