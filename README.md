@@ -79,4 +79,5 @@ Requires MongoDB and Redis running. Start `npm install && npm start` in `server`
 3. Add Playwright crawler and controlled active tests against lab only.
 4. Improve Redis caching with event-driven invalidation and deduplication.
 5. Add scan fingerprint comparisons and vulnerability lifecycle.
+7. Add Kubernetes manifests and Jenkins pipeline if required by the course.
 6. Add Kubernetes manifests and Jenkins pipeline if required by the course.
