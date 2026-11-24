@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   useEffect,
   useMemo,
   useRef,
@@ -51,16 +51,18 @@ import "./history.css";
 // API
 // ======================================================
 
+const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
 async function api(
   path,
   options = {}
 ) {
   const response =
     await fetch(
-      "/api" + path,
+      API_URL + "/api" + path,
       {
         credentials:
-          "same-origin",
+          "include",
 
         headers: {
           "Content-Type":
@@ -813,7 +815,7 @@ function App() {
 
 
       const socket =
-        io({
+        io(API_URL || window.location.origin, {
           path:
             "/socket.io",
 
@@ -2492,7 +2494,7 @@ function App() {
               <a
                 className="google"
 
-                href="/api/auth/google"
+                href={`${API_URL}/api/auth/google`}
               >
 
                 <span className="google-mark">
@@ -2904,7 +2906,7 @@ function App() {
                     {
                       averageSecurityScore ===
                       null
-                        ? "—"
+                        ? "â€”"
                         : `${averageSecurityScore}/100`
                     }
 
@@ -3744,7 +3746,7 @@ function App() {
                 className="download"
 
                 href={
-                  `/api/scans/${selected._id}/report`
+                  `${API_URL}/api/scans/${selected._id}/report`
                 }
               >
 
@@ -4462,7 +4464,7 @@ function App() {
                           "OWASP mapping unavailable"
                         }
 
-                        {" · "}
+                        {" Â· "}
 
                         Confidence:{" "}
 
@@ -4920,7 +4922,7 @@ function App() {
                                 ? (
 
                                   <span className="history-score pending">
-                                    —
+                                    â€”
                                   </span>
 
                                 )
