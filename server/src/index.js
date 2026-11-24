@@ -2,6 +2,7 @@
 import express from "express";
 import http from "node:http";
 import helmet from "helmet";
+import cors from "cors";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import bcrypt from "bcryptjs";
@@ -51,8 +52,13 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
+// Vercel frontend URL
 const PUBLIC_URL =
   process.env.PUBLIC_URL || "http://localhost:8081";
+
+// Render backend URL
+const API_URL =
+  process.env.API_URL || `http://localhost:${PORT}`;
 
 const JWT_ISSUER = "webshield";
 
@@ -70,8 +76,6 @@ const publicOrigin = new URL(PUBLIC_URL).origin;
 
 const app = express();
 
-// Trust one reverse proxy hop.
-// Adjust if your deployment has a different proxy topology.
 app.set("trust proxy", 1);
 
 const server = http.createServer(app);
@@ -80,7 +84,7 @@ const io = new SocketIOServer(server, {
   path: "/socket.io",
 
   cors: {
-    origin: PUBLIC_URL,
+    origin: publicOrigin,
     credentials: true,
   },
 });
@@ -106,6 +110,13 @@ const scanQueue = new Queue("scans", {
 // ======================================================
 
 app.disable("x-powered-by");
+
+app.use(
+  cors({
+    origin: publicOrigin,
+    credentials: true,
+  })
+);
 
 app.use(
   helmet({
@@ -135,11 +146,8 @@ app.use(passport.initialize());
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-
   max: 100,
-
   standardHeaders: true,
-
   legacyHeaders: false,
 
   message: {
@@ -194,9 +202,15 @@ function createToken(user) {
 function setAuthCookie(res, token) {
   res.cookie("ws_token", token, {
     httpOnly: true,
-    sameSite: "lax",
+
+    sameSite: PUBLIC_URL.startsWith("https://")
+      ? "none"
+      : "lax",
+
     secure: PUBLIC_URL.startsWith("https://"),
+
     maxAge: 7 * 24 * 60 * 60 * 1000,
+
     path: "/",
   });
 }
@@ -204,8 +218,13 @@ function setAuthCookie(res, token) {
 function clearAuthCookie(res) {
   res.clearCookie("ws_token", {
     httpOnly: true,
-    sameSite: "lax",
+
+    sameSite: PUBLIC_URL.startsWith("https://")
+      ? "none"
+      : "lax",
+
     secure: PUBLIC_URL.startsWith("https://"),
+
     path: "/",
   });
 }
@@ -268,7 +287,7 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
         clientSecret: GOOGLE_CLIENT_SECRET,
 
         callbackURL:
-          `${PUBLIC_URL}/api/auth/google/callback`,
+          `${API_URL}/api/auth/google/callback`,
       },
 
       async (accessToken, refreshToken, profile, done) => {
