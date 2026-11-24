@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   useEffect,
   useMemo,
   useRef,
@@ -485,7 +485,7 @@ function App() {
     url,
     setUrl,
   ] = useState(
-    "http://lab:4000/"
+    "https://webshield-mern.onrender.com/"
   );
 
 
@@ -2906,7 +2906,7 @@ function App() {
                     {
                       averageSecurityScore ===
                       null
-                        ? "â€”"
+                        ? "—"
                         : `${averageSecurityScore}/100`
                     }
 
@@ -4464,7 +4464,7 @@ function App() {
                           "OWASP mapping unavailable"
                         }
 
-                        {" Â· "}
+                        {" · "}
 
                         Confidence:{" "}
 
@@ -4922,7 +4922,7 @@ function App() {
                                 ? (
 
                                   <span className="history-score pending">
-                                    â€”
+                                    —
                                   </span>
 
                                 )
@@ -5274,3 +5274,4 @@ createRoot(
 ).render(
   <App />
 );
+
