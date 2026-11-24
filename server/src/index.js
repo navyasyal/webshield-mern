@@ -1,12 +1,11 @@
+
 import express from "express";
 import http from "node:http";
-
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import rateLimit from "express-rate-limit";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-
 import passport from "passport";
 
 import {
@@ -37,477 +36,252 @@ import {
   generateProfessionalReport,
 } from "./report.js";
 
-
 // ======================================================
 // Configuration
 // ======================================================
 
-const PORT =
-  Number(
-    process.env.PORT ||
-    5000
-  );
-
+const PORT = Number(process.env.PORT || 5000);
 
 const REDIS_URL =
-  process.env.REDIS_URL ||
-  "redis://redis:6379";
+  process.env.REDIS_URL || "redis://redis:6379";
 
+const JWT_SECRET = process.env.JWT_SECRET;
 
-const JWT_SECRET =
-  process.env.JWT_SECRET;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
-
-const GOOGLE_CLIENT_ID =
-  process.env.GOOGLE_CLIENT_ID;
-
-
-const GOOGLE_CLIENT_SECRET =
-  process.env.GOOGLE_CLIENT_SECRET;
-
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 const PUBLIC_URL =
-  process.env.PUBLIC_URL ||
-  "http://localhost:8081";
+  process.env.PUBLIC_URL || "http://localhost:8081";
 
+const JWT_ISSUER = "webshield";
 
-const JWT_ISSUER =
-  "webshield";
+const SCAN_PROGRESS_CHANNEL = "webshield:scan-progress";
 
-
-const SCAN_PROGRESS_CHANNEL =
-  "webshield:scan-progress";
-
-
-if (
-  !JWT_SECRET
-) {
-  throw new Error(
-    "JWT_SECRET is required"
-  );
+if (!JWT_SECRET) {
+  throw new Error("JWT_SECRET is required");
 }
 
+const publicOrigin = new URL(PUBLIC_URL).origin;
 
 // ======================================================
 // Express / HTTP / Socket.IO
 // ======================================================
 
-const app =
-  express();
+const app = express();
 
+// Trust one reverse proxy hop.
+// Adjust if your deployment has a different proxy topology.
+app.set("trust proxy", 1);
 
-const server =
-  http.createServer(
-    app
-  );
+const server = http.createServer(app);
 
+const io = new SocketIOServer(server, {
+  path: "/socket.io",
 
-const io =
-  new SocketIOServer(
-    server,
-    {
-      path:
-        "/socket.io",
-
-      cors: {
-        origin:
-          PUBLIC_URL,
-
-        credentials:
-          true,
-      },
-    }
-  );
-
+  cors: {
+    origin: PUBLIC_URL,
+    credentials: true,
+  },
+});
 
 // ======================================================
 // Redis / BullMQ
 // ======================================================
 
-const cacheRedis =
-  new IORedis(
-    REDIS_URL
-  );
+const cacheRedis = new IORedis(REDIS_URL);
 
+const progressSubscriber = new IORedis(REDIS_URL);
 
-const progressSubscriber =
-  new IORedis(
-    REDIS_URL
-  );
+const queueConnection = new IORedis(REDIS_URL, {
+  maxRetriesPerRequest: null,
+});
 
-
-const queueConnection =
-  new IORedis(
-    REDIS_URL,
-    {
-      maxRetriesPerRequest:
-        null,
-    }
-  );
-
-
-const scanQueue =
-  new Queue(
-    "scans",
-    {
-      connection:
-        queueConnection,
-    }
-  );
-
+const scanQueue = new Queue("scans", {
+  connection: queueConnection,
+});
 
 // ======================================================
 // Express Middleware
 // ======================================================
 
-app.disable(
-  "x-powered-by"
-);
-
+app.disable("x-powered-by");
 
 app.use(
   helmet({
-    contentSecurityPolicy:
-      false,
+    contentSecurityPolicy: false,
   })
 );
-
 
 app.use(
   express.json({
-    limit:
-      "1mb",
+    limit: "1mb",
   })
 );
-
 
 app.use(
   express.urlencoded({
-    extended:
-      false,
+    extended: false,
   })
 );
 
+app.use(cookieParser());
 
-app.use(
-  cookieParser()
-);
-
-
-app.use(
-  passport.initialize()
-);
-
+app.use(passport.initialize());
 
 // ======================================================
 // Authentication Rate Limit
 // ======================================================
 
-const authLimiter =
-  rateLimit({
-    windowMs:
-      15 *
-      60 *
-      1000,
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
 
-    max:
-      100,
+  max: 100,
 
-    standardHeaders:
-      true,
+  standardHeaders: true,
 
-    legacyHeaders:
-      false,
+  legacyHeaders: false,
 
-    message: {
-      error:
-        "Too many authentication requests. Please try again later.",
-    },
-  });
+  message: {
+    error:
+      "Too many authentication requests. Please try again later.",
+  },
+});
 
-
-app.use(
-  "/api/auth",
-  authLimiter
-);
-
+app.use("/api/auth", authLimiter);
 
 // ======================================================
 // Origin Protection
 // ======================================================
 
-const publicOrigin =
-  new URL(
-    PUBLIC_URL
-  ).origin;
-
-
-app.use(
-  "/api",
-
-  (
-    req,
-    res,
-    next
-  ) => {
-
-    if (
-      [
-        "GET",
-        "HEAD",
-        "OPTIONS",
-      ].includes(
-        req.method
-      )
-    ) {
-      return next();
-    }
-
-
-    const origin =
-      req.get(
-        "origin"
-      );
-
-
-    if (
-      origin &&
-      origin !==
-        publicOrigin
-    ) {
-      return res
-        .status(403)
-        .json({
-          error:
-            "Invalid request origin",
-        });
-    }
-
-
-    next();
+app.use("/api", (req, res, next) => {
+  if (
+    ["GET", "HEAD", "OPTIONS"].includes(req.method)
+  ) {
+    return next();
   }
-);
 
+  const origin = req.get("origin");
+
+  if (origin && origin !== publicOrigin) {
+    return res.status(403).json({
+      error: "Invalid request origin",
+    });
+  }
+
+  next();
+});
 
 // ======================================================
 // JWT
 // ======================================================
 
-function createToken(
-  user
-) {
+function createToken(user) {
   return jwt.sign(
     {
-      email:
-        user.email,
-
-      role:
-        user.role,
+      email: user.email,
+      role: user.role,
     },
-
     JWT_SECRET,
-
     {
-      subject:
-        user._id.toString(),
-
-      issuer:
-        JWT_ISSUER,
-
-      expiresIn:
-        "7d",
+      subject: user._id.toString(),
+      issuer: JWT_ISSUER,
+      expiresIn: "7d",
     }
   );
 }
 
-
-function setAuthCookie(
-  res,
-  token
-) {
-  res.cookie(
-    "ws_token",
-    token,
-    {
-      httpOnly:
-        true,
-
-      sameSite:
-        "lax",
-
-      secure:
-        PUBLIC_URL.startsWith(
-          "https://"
-        ),
-
-      maxAge:
-        7 *
-        24 *
-        60 *
-        60 *
-        1000,
-
-      path:
-        "/",
-    }
-  );
+function setAuthCookie(res, token) {
+  res.cookie("ws_token", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: PUBLIC_URL.startsWith("https://"),
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/",
+  });
 }
 
-
-function clearAuthCookie(
-  res
-) {
-  res.clearCookie(
-    "ws_token",
-    {
-      httpOnly:
-        true,
-
-      sameSite:
-        "lax",
-
-      secure:
-        PUBLIC_URL.startsWith(
-          "https://"
-        ),
-
-      path:
-        "/",
-    }
-  );
+function clearAuthCookie(res) {
+  res.clearCookie("ws_token", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: PUBLIC_URL.startsWith("https://"),
+    path: "/",
+  });
 }
-
 
 // ======================================================
-// Auth Middleware
+// Authentication Middleware
 // ======================================================
 
-async function requireAuth(
-  req,
-  res,
-  next
-) {
+async function requireAuth(req, res, next) {
   try {
-
-    const token =
-      req.cookies
-        ?.ws_token;
-
+    const token = req.cookies?.ws_token;
 
     if (!token) {
-      return res
-        .status(401)
-        .json({
-          error:
-            "Authentication required",
-        });
+      return res.status(401).json({
+        error: "Authentication required",
+      });
     }
 
+    const payload = jwt.verify(
+      token,
+      JWT_SECRET,
+      {
+        issuer: JWT_ISSUER,
+      }
+    );
 
-    const payload =
-      jwt.verify(
-        token,
-        JWT_SECRET,
-        {
-          issuer:
-            JWT_ISSUER,
-        }
-      );
-
-
-    const user =
-      await User.findById(
-        payload.sub
-      );
-
+    const user = await User.findById(payload.sub);
 
     if (!user) {
+      clearAuthCookie(res);
 
-      clearAuthCookie(
-        res
-      );
-
-
-      return res
-        .status(401)
-        .json({
-          error:
-            "User account not found",
-        });
+      return res.status(401).json({
+        error: "User account not found",
+      });
     }
 
-
-    req.user =
-      user;
-
+    req.user = user;
 
     next();
 
   } catch {
+    clearAuthCookie(res);
 
-    clearAuthCookie(
-      res
-    );
-
-
-    return res
-      .status(401)
-      .json({
-        error:
-          "Invalid or expired session",
-      });
+    return res.status(401).json({
+      error: "Invalid or expired session",
+    });
   }
 }
-
 
 // ======================================================
 // Google OAuth
 // ======================================================
 
-if (
-  GOOGLE_CLIENT_ID &&
-  GOOGLE_CLIENT_SECRET
-) {
+if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
   passport.use(
     new GoogleStrategy(
       {
-        clientID:
-          GOOGLE_CLIENT_ID,
+        clientID: GOOGLE_CLIENT_ID,
 
-        clientSecret:
-          GOOGLE_CLIENT_SECRET,
+        clientSecret: GOOGLE_CLIENT_SECRET,
 
         callbackURL:
           `${PUBLIC_URL}/api/auth/google/callback`,
       },
 
-      async (
-        accessToken,
-        refreshToken,
-        profile,
-        done
-      ) => {
-
+      async (accessToken, refreshToken, profile, done) => {
         try {
-
           const email =
             profile.emails
-              ?.find(
-                (
-                  item
-                ) =>
-                  item.verified !==
-                  false
-              )
+              ?.find((item) => item.verified !== false)
               ?.value
               ?.toLowerCase()
               ?.trim() ||
-            profile.emails
-              ?.[0]
-              ?.value
+            profile.emails?.[0]?.value
               ?.toLowerCase()
               ?.trim();
-
 
           if (!email) {
             return done(
@@ -517,283 +291,138 @@ if (
             );
           }
 
-
-          let user =
-            await User.findOne({
-              googleId:
-                profile.id,
-            });
-
+          let user = await User.findOne({
+            googleId: profile.id,
+          });
 
           if (!user) {
-            user =
-              await User.findOne({
-                email,
-              });
+            user = await User.findOne({
+              email,
+            });
           }
 
-
           if (user) {
-
-            if (
-              !user.googleId
-            ) {
-              user.googleId =
-                profile.id;
+            if (!user.googleId) {
+              user.googleId = profile.id;
             }
 
-
-            if (
-              !user.name &&
-              profile.displayName
-            ) {
-              user.name =
-                profile.displayName;
+            if (!user.name && profile.displayName) {
+              user.name = profile.displayName;
             }
-
 
             await user.save();
 
           } else {
-
-            user =
-              await User.create({
-                name:
-                  profile.displayName ||
-                  "",
-
-                email,
-
-                googleId:
-                  profile.id,
-
-                role:
-                  "user",
-              });
+            user = await User.create({
+              name: profile.displayName || "",
+              email,
+              googleId: profile.id,
+              role: "user",
+            });
           }
 
+          return done(null, user);
 
-          return done(
-            null,
-            user
-          );
-
-        } catch (
-          error
-        ) {
-
-          return done(
-            error
-          );
-
+        } catch (error) {
+          return done(error);
         }
       }
     )
   );
 }
 
-
 // ======================================================
 // Socket Cookie Parser
 // ======================================================
 
-function parseCookies(
-  cookieHeader = ""
-) {
-  const cookies =
-    {};
+function parseCookies(cookieHeader = "") {
+  const cookies = {};
 
+  for (const part of cookieHeader.split(";")) {
+    const separator = part.indexOf("=");
 
-  for (
-    const part
-    of cookieHeader.split(
-      ";"
-    )
-  ) {
-
-    const separator =
-      part.indexOf(
-        "="
-      );
-
-
-    if (
-      separator ===
-      -1
-    ) {
+    if (separator === -1) {
       continue;
     }
 
+    const key = part.slice(0, separator).trim();
 
-    const key =
-      part
-        .slice(
-          0,
-          separator
-        )
-        .trim();
-
-
-    const value =
-      part
-        .slice(
-          separator +
-            1
-        )
-        .trim();
-
+    const value = part.slice(separator + 1).trim();
 
     if (!key) {
       continue;
     }
 
-
     try {
-
-      cookies[
-        key
-      ] =
-        decodeURIComponent(
-          value
-        );
-
+      cookies[key] = decodeURIComponent(value);
     } catch {
-
-      cookies[
-        key
-      ] =
-        value;
-
+      cookies[key] = value;
     }
   }
 
-
   return cookies;
 }
-
 
 // ======================================================
 // Socket Authentication
 // ======================================================
 
-io.use(
-  async (
-    socket,
-    next
-  ) => {
+io.use(async (socket, next) => {
+  try {
+    const cookies = parseCookies(
+      socket.handshake.headers.cookie || ""
+    );
 
-    try {
+    const token = cookies.ws_token;
 
-      const cookies =
-        parseCookies(
-          socket
-            .handshake
-            .headers
-            .cookie ||
-          ""
-        );
-
-
-      const token =
-        cookies.ws_token;
-
-
-      if (!token) {
-        return next(
-          new Error(
-            "Authentication required"
-          )
-        );
-      }
-
-
-      const payload =
-        jwt.verify(
-          token,
-          JWT_SECRET,
-          {
-            issuer:
-              JWT_ISSUER,
-          }
-        );
-
-
-      const user =
-        await User.findById(
-          payload.sub
-        );
-
-
-      if (!user) {
-        return next(
-          new Error(
-            "User not found"
-          )
-        );
-      }
-
-
-      socket.user =
-        user;
-
-
-      next();
-
-    } catch {
-
-      next(
-        new Error(
-          "Invalid session"
-        )
+    if (!token) {
+      return next(
+        new Error("Authentication required")
       );
-
     }
-  }
-);
 
+    const payload = jwt.verify(
+      token,
+      JWT_SECRET,
+      {
+        issuer: JWT_ISSUER,
+      }
+    );
+
+    const user = await User.findById(payload.sub);
+
+    if (!user) {
+      return next(
+        new Error("User not found")
+      );
+    }
+
+    socket.user = user;
+
+    next();
+
+  } catch {
+    next(
+      new Error("Invalid session")
+    );
+  }
+});
 
 // ======================================================
 // Socket Connection
 // ======================================================
 
-io.on(
-  "connection",
+io.on("connection", (socket) => {
+  const userId = socket.user._id.toString();
 
-  (
-    socket
-  ) => {
+  socket.join(`user:${userId}`);
 
-    const userId =
-      socket
-        .user
-        ._id
-        .toString();
+  console.log(`Socket connected: ${userId}`);
 
-
-    socket.join(
-      `user:${userId}`
-    );
-
-
-    console.log(
-      `Socket connected: ${userId}`
-    );
-
-
-    socket.on(
-      "disconnect",
-
-      () => {
-
-        console.log(
-          `Socket disconnected: ${userId}`
-        );
-
-      }
-    );
-  }
-);
-
+  socket.on("disconnect", () => {
+    console.log(`Socket disconnected: ${userId}`);
+  });
+});
 
 // ======================================================
 // Redis Scan Progress
@@ -803,95 +432,49 @@ await progressSubscriber.subscribe(
   SCAN_PROGRESS_CHANNEL
 );
 
-
 progressSubscriber.on(
   "message",
-
-  async (
-    channel,
-    message
-  ) => {
-
-    if (
-      channel !==
-      SCAN_PROGRESS_CHANNEL
-    ) {
+  async (channel, message) => {
+    if (channel !== SCAN_PROGRESS_CHANNEL) {
       return;
     }
 
-
     try {
+      const event = JSON.parse(message);
 
-      const event =
-        JSON.parse(
-          message
-        );
-
-
-      if (
-        !event.owner
-      ) {
+      if (!event.owner) {
         return;
       }
-
 
       await cacheRedis.del(
         `scans:${event.owner}`
       );
 
-
       io
-        .to(
-          `user:${event.owner}`
-        )
-        .emit(
-          "scan:progress",
-          event
-        );
+        .to(`user:${event.owner}`)
+        .emit("scan:progress", event);
 
-    } catch (
-      error
-    ) {
-
+    } catch (error) {
       console.error(
         "Progress subscriber error:",
         error.message
       );
-
     }
   }
 );
-
 
 // ======================================================
 // Health
 // ======================================================
 
-app.get(
-  "/api/health",
-
-  (
-    req,
-    res
-  ) => {
-
-    res.json({
-      ok:
-        true,
-
-      application:
-        "WebShield",
-
-      service:
-        "API",
-
-      timestamp:
-        new Date()
-          .toISOString(),
-    });
-  }
-);
-
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    application: "WebShield",
+    service: "API",
+    timestamp: new Date().toISOString(),
+  });
+});
 
 // ======================================================
 // Register
@@ -899,128 +482,67 @@ app.get(
 
 app.post(
   "/api/auth/register",
-
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
+      const email = String(
+        req.body.email || ""
+      )
+        .trim()
+        .toLowerCase();
 
-      const email =
-        String(
-          req.body.email ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
+      const password = String(
+        req.body.password || ""
+      );
 
-
-      const password =
-        String(
-          req.body.password ||
-          ""
-        );
-
-
-      if (
-        !email ||
-        !password
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Email and password are required",
-          });
-      }
-
-
-      if (
-        password.length <
-        8
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "Password must be at least 8 characters",
-          });
-      }
-
-
-      const existing =
-        await User.findOne({
-          email,
+      if (!email || !password) {
+        return res.status(400).json({
+          error: "Email and password are required",
         });
+      }
 
+      if (password.length < 8) {
+        return res.status(400).json({
+          error: "Password must be at least 8 characters",
+        });
+      }
+
+      const existing = await User.findOne({
+        email,
+      });
 
       if (existing) {
-        return res
-          .status(409)
-          .json({
-            error:
-              "An account with this email already exists",
-          });
+        return res.status(409).json({
+          error:
+            "An account with this email already exists",
+        });
       }
 
-
-      const passwordHash =
-        await bcrypt.hash(
-          password,
-          12
-        );
-
-
-      const user =
-        await User.create({
-          email,
-
-          passwordHash,
-
-          role:
-            "user",
-        });
-
-
-      const token =
-        createToken(
-          user
-        );
-
-
-      setAuthCookie(
-        res,
-        token
+      const passwordHash = await bcrypt.hash(
+        password,
+        12
       );
 
+      const user = await User.create({
+        email,
+        passwordHash,
+        role: "user",
+      });
 
-      res
-        .status(201)
-        .json({
-          id:
-            user._id,
+      const token = createToken(user);
 
-          email:
-            user.email,
+      setAuthCookie(res, token);
 
-          role:
-            user.role,
-        });
+      res.status(201).json({
+        id: user._id,
+        email: user.email,
+        role: user.role,
+      });
 
-    } catch (
-      error
-    ) {
-
-      next(
-        error
-      );
-
+    } catch (error) {
+      next(error);
     }
   }
 );
-
 
 // ======================================================
 // Login
@@ -1028,212 +550,103 @@ app.post(
 
 app.post(
   "/api/auth/login",
-
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
+      const email = String(
+        req.body.email || ""
+      )
+        .trim()
+        .toLowerCase();
 
-      const email =
-        String(
-          req.body.email ||
-          ""
-        )
-          .trim()
-          .toLowerCase();
-
-
-      const password =
-        String(
-          req.body.password ||
-          ""
-        );
-
-
-      const user =
-        await User.findOne({
-          email,
-        });
-
-
-      if (
-        !user ||
-        !user.passwordHash
-      ) {
-        return res
-          .status(401)
-          .json({
-            error:
-              "Invalid email or password",
-          });
-      }
-
-
-      const valid =
-        await bcrypt.compare(
-          password,
-          user.passwordHash
-        );
-
-
-      if (!valid) {
-        return res
-          .status(401)
-          .json({
-            error:
-              "Invalid email or password",
-          });
-      }
-
-
-      const token =
-        createToken(
-          user
-        );
-
-
-      setAuthCookie(
-        res,
-        token
+      const password = String(
+        req.body.password || ""
       );
 
-
-      res.json({
-        id:
-          user._id,
-
-        email:
-          user.email,
-
-        role:
-          user.role,
+      const user = await User.findOne({
+        email,
       });
 
-    } catch (
-      error
-    ) {
+      if (!user || !user.passwordHash) {
+        return res.status(401).json({
+          error: "Invalid email or password",
+        });
+      }
 
-      next(
-        error
+      const valid = await bcrypt.compare(
+        password,
+        user.passwordHash
       );
 
+      if (!valid) {
+        return res.status(401).json({
+          error: "Invalid email or password",
+        });
+      }
+
+      const token = createToken(user);
+
+      setAuthCookie(res, token);
+
+      res.json({
+        id: user._id,
+        email: user.email,
+        role: user.role,
+      });
+
+    } catch (error) {
+      next(error);
     }
   }
 );
-
 
 // ======================================================
 // Logout
 // ======================================================
 
-app.post(
-  "/api/auth/logout",
+app.post("/api/auth/logout", (req, res) => {
+  clearAuthCookie(res);
 
-  (
-    req,
-    res
-  ) => {
-
-    clearAuthCookie(
-      res
-    );
-
-
-    res.json({
-      ok:
-        true,
-    });
-  }
-);
-
+  res.json({
+    ok: true,
+  });
+});
 
 // ======================================================
 // Current User
 // ======================================================
 
-app.get(
-  "/api/me",
-
-  requireAuth,
-
-  (
-    req,
-    res
-  ) => {
-
-    res.json({
-      id:
-        req.user._id,
-
-      name:
-        req.user.name,
-
-      email:
-        req.user.email,
-
-      role:
-        req.user.role,
-    });
-  }
-);
-
+app.get("/api/me", requireAuth, (req, res) => {
+  res.json({
+    id: req.user._id,
+    name: req.user.name,
+    email: req.user.email,
+    role: req.user.role,
+  });
+});
 
 // ======================================================
 // Google Login
-//
-// IMPORTANT:
-// prompt: "select_account"
-// forces Google account chooser every time.
 // ======================================================
 
 app.get(
   "/api/auth/google",
-
-  (
-    req,
-    res,
-    next
-  ) => {
-
-    if (
-      !GOOGLE_CLIENT_ID ||
-      !GOOGLE_CLIENT_SECRET
-    ) {
-      return res
-        .status(503)
-        .json({
-          error:
-            "Google OAuth is not configured",
-        });
+  (req, res, next) => {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      return res.status(503).json({
+        error: "Google OAuth is not configured",
+      });
     }
-
 
     passport.authenticate(
       "google",
-
       {
-        scope: [
-          "profile",
-          "email",
-        ],
-
-        session:
-          false,
-
-        prompt:
-          "select_account",
+        scope: ["profile", "email"],
+        session: false,
+        prompt: "select_account",
       }
-    )(
-      req,
-      res,
-      next
-    );
+    )(req, res, next);
   }
 );
-
 
 // ======================================================
 // Google Callback
@@ -1241,94 +654,51 @@ app.get(
 
 app.get(
   "/api/auth/google/callback",
-
-  (
-    req,
-    res,
-    next
-  ) => {
-
-    if (
-      !GOOGLE_CLIENT_ID ||
-      !GOOGLE_CLIENT_SECRET
-    ) {
+  (req, res, next) => {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
       return res.redirect(
         `${PUBLIC_URL}/?auth=google-not-configured`
       );
     }
 
-
     passport.authenticate(
       "google",
-
       {
-        session:
-          false,
-
+        session: false,
         failureRedirect:
           `${PUBLIC_URL}/?auth=google-failed`,
       },
-
-      (
-        error,
-        user
-      ) => {
-
-        if (
-          error ||
-          !user
-        ) {
-
+      (error, user) => {
+        if (error || !user) {
           console.error(
             "Google OAuth error:",
-            error?.message ||
-            "No user"
+            error?.message || "No user"
           );
-
 
           return res.redirect(
             `${PUBLIC_URL}/?auth=google-failed`
           );
         }
 
+        const token = createToken(user);
 
-        const token =
-          createToken(
-            user
-          );
+        setAuthCookie(res, token);
 
-
-        setAuthCookie(
-          res,
-          token
-        );
-
-
-        return res.redirect(
-          PUBLIC_URL
-        );
+        return res.redirect(PUBLIC_URL);
       }
-    )(
-      req,
-      res,
-      next
-    );
+    )(req, res, next);
   }
 );
-
 
 // ======================================================
 // Scan Cache
 // ======================================================
 
-async function clearUserScanCache(
-  userId
-) {
+async function clearUserScanCache(userId) {
   await cacheRedis.del(
     `scans:${userId}`
   );
 }
-
 
 // ======================================================
 // Scan History
@@ -1336,81 +706,45 @@ async function clearUserScanCache(
 
 app.get(
   "/api/scans",
-
   requireAuth,
-
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
+      const owner = req.user._id.toString();
 
-      const owner =
-        req.user
-          ._id
-          .toString();
+      const cacheKey = `scans:${owner}`;
 
-
-      const cacheKey =
-        `scans:${owner}`;
-
-
-      const cached =
-        await cacheRedis.get(
-          cacheKey
-        );
-
+      const cached = await cacheRedis.get(
+        cacheKey
+      );
 
       if (cached) {
         return res.json(
-          JSON.parse(
-            cached
-          )
+          JSON.parse(cached)
         );
       }
 
-
-      const scans =
-        await Scan
-          .find({
-            owner:
-              req.user._id,
-          })
-          .sort({
-            createdAt:
-              -1,
-          })
-          .lean();
-
+      const scans = await Scan.find({
+        owner: req.user._id,
+      })
+        .sort({
+          createdAt: -1,
+        })
+        .lean();
 
       await cacheRedis.set(
         cacheKey,
-        JSON.stringify(
-          scans
-        ),
+        JSON.stringify(scans),
         "EX",
         5
       );
 
+      res.json(scans);
 
-      res.json(
-        scans
-      );
-
-    } catch (
-      error
-    ) {
-
-      next(
-        error
-      );
-
+    } catch (error) {
+      next(error);
     }
   }
 );
-
 
 // ======================================================
 // Create Scan
@@ -1418,137 +752,76 @@ app.get(
 
 app.post(
   "/api/scans",
-
   requireAuth,
-
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      if (
-        req.body.authorized !==
-        true
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "You must confirm authorization before starting a scan",
-          });
+      if (req.body.authorized !== true) {
+        return res.status(400).json({
+          error:
+            "You must confirm authorization before starting a scan",
+        });
       }
 
+      const target = validateLabUrl(
+        String(req.body.url || "")
+      );
 
-      const target =
-        validateLabUrl(
-          String(
-            req.body.url ||
-            ""
-          )
-        );
+      const scan = await Scan.create({
+        owner: req.user._id,
+        url: target,
+        status: "queued",
+        scanType: "full",
 
+        progress: {
+          percent: 0,
+          stage: "Queued",
+          message: "Waiting for scanner worker",
+        },
 
-      const scan =
-        await Scan.create({
-          owner:
-            req.user._id,
+        pages: [],
 
-          url:
-            target,
+        discovery: {
+          forms: [],
+          apiRequests: [],
+        },
 
-          status:
-            "queued",
+        findings: [],
 
-          scanType:
-            "full",
-
-          progress: {
-            percent:
-              0,
-
-            stage:
-              "Queued",
-
-            message:
-              "Waiting for scanner worker",
-          },
-
-          pages:
-            [],
-
-          discovery: {
-            forms:
-              [],
-
-            apiRequests:
-              [],
-          },
-
-          findings:
-            [],
-
-          securityScore:
-            100,
-        });
-
+        securityScore: 100,
+      });
 
       await scanQueue.add(
         "security-scan",
-
         {
-          scanId:
-            scan._id.toString(),
+          scanId: scan._id.toString(),
         },
-
         {
-          jobId:
-            scan._id.toString(),
+          jobId: scan._id.toString(),
 
           removeOnComplete: {
-            count:
-              100,
+            count: 100,
           },
 
           removeOnFail: {
-            count:
-              100,
+            count: 100,
           },
         }
       );
 
-
       await clearUserScanCache(
-        req.user
-          ._id
-          .toString()
+        req.user._id.toString()
       );
 
+      res.status(202).json({
+        id: scan._id,
+        status: scan.status,
+      });
 
-      res
-        .status(202)
-        .json({
-          id:
-            scan._id,
-
-          status:
-            scan.status,
-        });
-
-    } catch (
-      error
-    ) {
-
-      next(
-        error
-      );
-
+    } catch (error) {
+      next(error);
     }
   }
 );
-
 
 // ======================================================
 // Get Individual Scan
@@ -1556,53 +829,27 @@ app.post(
 
 app.get(
   "/api/scans/:id",
-
   requireAuth,
-
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const scan =
-        await Scan.findOne({
-          _id:
-            req.params.id,
-
-          owner:
-            req.user._id,
-        });
-
+      const scan = await Scan.findOne({
+        _id: req.params.id,
+        owner: req.user._id,
+      });
 
       if (!scan) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "Scan not found",
-          });
+        return res.status(404).json({
+          error: "Scan not found",
+        });
       }
 
+      res.json(scan);
 
-      res.json(
-        scan
-      );
-
-    } catch (
-      error
-    ) {
-
-      next(
-        error
-      );
-
+    } catch (error) {
+      next(error);
     }
   }
 );
-
 
 // ======================================================
 // Professional PDF Report
@@ -1610,49 +857,26 @@ app.get(
 
 app.get(
   "/api/scans/:id/report",
-
   requireAuth,
-
-  async (
-    req,
-    res,
-    next
-  ) => {
-
+  async (req, res, next) => {
     try {
-
-      const scan =
-        await Scan.findOne({
-          _id:
-            req.params.id,
-
-          owner:
-            req.user._id,
-        });
-
+      const scan = await Scan.findOne({
+        _id: req.params.id,
+        owner: req.user._id,
+      });
 
       if (!scan) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "Scan not found",
-          });
+        return res.status(404).json({
+          error: "Scan not found",
+        });
       }
 
-
-      if (
-        scan.status !==
-        "completed"
-      ) {
-        return res
-          .status(409)
-          .json({
-            error:
-              "PDF report is available only after the scan is completed",
-          });
+      if (scan.status !== "completed") {
+        return res.status(409).json({
+          error:
+            "PDF report is available only after the scan is completed",
+        });
       }
-
 
       generateProfessionalReport(
         scan,
@@ -1660,104 +884,64 @@ app.get(
         res
       );
 
-    } catch (
-      error
-    ) {
-
-      next(
-        error
-      );
-
+    } catch (error) {
+      next(error);
     }
   }
 );
-
 
 // ======================================================
 // API 404
 // ======================================================
 
-app.use(
-  "/api",
-
-  (
-    req,
-    res
-  ) => {
-
-    res
-      .status(404)
-      .json({
-        error:
-          "API endpoint not found",
-      });
-  }
-);
-
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: "API endpoint not found",
+  });
+});
 
 // ======================================================
 // Global Error Handler
 // ======================================================
 
-app.use(
-  (
-    error,
-    req,
-    res,
-    next
-  ) => {
+app.use((error, req, res, next) => {
+  console.error("API error:", error);
 
-    console.error(
-      "API error:",
-      error
-    );
-
-
-    if (
-      res.headersSent
-    ) {
-      return next(
-        error
-      );
-    }
-
-
-    if (
-      error?.name ===
-      "CastError"
-    ) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "Invalid identifier",
-        });
-    }
-
-
-    if (
-      error?.code ===
-      11000
-    ) {
-      return res
-        .status(409)
-        .json({
-          error:
-            "Duplicate record",
-        });
-    }
-
-
-    res
-      .status(500)
-      .json({
-        error:
-          error?.message ||
-          "Internal server error",
-      });
+  if (res.headersSent) {
+    return next(error);
   }
-);
 
+  if (error?.name === "CastError") {
+    return res.status(400).json({
+      error: "Invalid identifier",
+    });
+  }
+
+  if (error?.code === 11000) {
+    return res.status(409).json({
+      error: "Duplicate record",
+    });
+  }
+
+  const statusCode = Number(
+    error?.statusCode || error?.status
+  );
+
+  if (
+    Number.isInteger(statusCode) &&
+    statusCode >= 400 &&
+    statusCode < 500
+  ) {
+    return res.status(statusCode).json({
+      error:
+        error.message || "Request could not be processed",
+    });
+  }
+
+  return res.status(500).json({
+    error: "Internal server error",
+  });
+});
 
 // ======================================================
 // Start API
@@ -1765,16 +949,12 @@ app.use(
 
 await connectDb();
 
-
 server.listen(
   PORT,
   "0.0.0.0",
-
   () => {
-
     console.log(
       `WebShield API + Socket.IO ready on port ${PORT}`
     );
-
   }
 );

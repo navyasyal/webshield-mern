@@ -1,78 +1,136 @@
 
-import jwt from 'jsonwebtoken';
-import { z } from 'zod';
+import jwt from "jsonwebtoken";
+import { z } from "zod";
 
 export const credentials = z.object({
   email: z.string().email().max(200),
   password: z.string().min(8).max(128),
 });
 
+// ======================================================
+// JWT
+// ======================================================
+
 export function issueToken(user) {
   return jwt.sign(
-    { sub: String(user._id), role: user.role },
+    {
+      sub: String(user._id),
+      role: user.role,
+    },
     process.env.JWT_SECRET,
-    { expiresIn: '2h', issuer: 'webshield' }
+    {
+      expiresIn: "2h",
+      issuer: "webshield",
+    }
   );
 }
 
+// ======================================================
+// Authentication Cookie
+// ======================================================
+
 export function setAuthCookie(res, token) {
-  res.cookie('ws_token', token, {
+  res.cookie("ws_token", token, {
     httpOnly: true,
-    sameSite: 'strict',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
     maxAge: 7200000,
-    path: '/',
+    path: "/",
   });
 }
+
+// ======================================================
+// Authentication Middleware
+// ======================================================
 
 export function auth(req, res, next) {
   try {
     const token = req.cookies.ws_token;
-    const claims = jwt.verify(token, process.env.JWT_SECRET, {
-      issuer: 'webshield',
-    });
+
+    const claims = jwt.verify(
+      token,
+      process.env.JWT_SECRET,
+      {
+        issuer: "webshield",
+      }
+    );
+
     req.user = claims.sub;
+
     next();
+
   } catch {
-    res.status(401).json({ error: 'Authentication required' });
+    res.status(401).json({
+      error: "Authentication required",
+    });
   }
 }
 
+// ======================================================
+// URL Validation Error
+// ======================================================
+
+function targetError(statusCode, message) {
+  const error = new Error(message);
+
+  error.statusCode = statusCode;
+
+  return error;
+}
+
+// ======================================================
+// Secure Lab URL Validation
+// ======================================================
+
 export function validateLabUrl(raw) {
-  let u;
+  let url;
 
   try {
-    u = new URL(raw);
+    url = new URL(raw);
   } catch {
-    const error = new Error('A valid target URL is required');
-    error.statusCode = 400;
-    throw error;
+    throw targetError(
+      400,
+      "A valid target URL is required"
+    );
   }
 
-  const allowed = (process.env.SCAN_ALLOWED_HOSTS || 'lab')
-    .split(',')
-    .map(s => s.trim())
+  const allowedHosts = (
+    process.env.SCAN_ALLOWED_HOSTS || "lab"
+  )
+    .split(",")
+    .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
 
-  const validProtocol = ['http:', 'https:'].includes(u.protocol);
-  const hasCredentials = Boolean(u.username || u.password);
-  const validPort = !u.port || ['4000', '80', '443'].includes(u.port);
-  const allowedHost = allowed.includes(u.hostname);
+  const protocolAllowed = [
+    "http:",
+    "https:",
+  ].includes(url.protocol);
 
-  if (!validProtocol || hasCredentials || !validPort) {
-    const error = new Error('Invalid target URL');
-    error.statusCode = 400;
-    throw error;
-  }
+  const credentialsPresent = Boolean(
+    url.username || url.password
+  );
 
-  if (!allowedHost) {
-    const error = new Error(
-      'Only explicitly allowlisted lab targets are supported'
+  const portAllowed =
+    !url.port ||
+    ["4000", "80", "443"].includes(url.port);
+
+  const hostAllowed = allowedHosts.includes(
+    url.hostname.toLowerCase()
+  );
+
+  if (
+    !protocolAllowed ||
+    credentialsPresent ||
+    !portAllowed ||
+    !hostAllowed
+  ) {
+    throw targetError(
+      403,
+      "Only explicitly allowlisted lab targets are supported"
     );
-    error.statusCode = 403;
-    throw error;
   }
 
-  u.hash = '';
-  return u.toString();
+  url.hash = "";
+
+  return url.toString();
 }
