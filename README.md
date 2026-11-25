@@ -76,7 +76,11 @@ Requires MongoDB and Redis running. Start `npm install && npm start` in `server`
 
 1. Add scan status events with Socket.IO and full dashboard charts.
 
+
+
 2. Add robust per-target authorization proof and scanner sandboxing.
+
+
 
 3. Add Playwright crawler and controlled active tests against lab only.
 
