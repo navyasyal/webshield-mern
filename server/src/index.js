@@ -1,4 +1,4 @@
-
+﻿
 import express from "express";
 import http from "node:http";
 import helmet from "helmet";
@@ -8,6 +8,8 @@ import rateLimit from "express-rate-limit";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import passport from "passport";
+import swaggerUi from "swagger-ui-express";
+import swaggerJsdoc from "swagger-jsdoc";
 
 import {
   Strategy as GoogleStrategy,
@@ -139,6 +141,294 @@ app.use(
 app.use(cookieParser());
 
 app.use(passport.initialize());
+
+// ======================================================
+// Swagger API Documentation
+// ======================================================
+
+const swaggerSpec = swaggerJsdoc({
+  definition: {
+    openapi: "3.0.3",
+
+    info: {
+      title: "WebShield API",
+      version: "1.0.0",
+      description:
+        "API documentation for WebShield - MERN-based web security scanner.",
+    },
+
+    servers: [
+      {
+        url: "https://webshield-api-n7dx.onrender.com",
+        description: "Production server",
+      },
+      {
+        url: "http://localhost:5000",
+        description: "Local development server",
+      },
+    ],
+
+    tags: [
+      { name: "Health", description: "API health checks" },
+      { name: "Authentication", description: "User authentication" },
+      { name: "Scans", description: "Security scanning operations" },
+    ],
+
+    components: {
+      securitySchemes: {
+        cookieAuth: {
+          type: "apiKey",
+          in: "cookie",
+          name: "ws_token",
+          description: "HTTP-only authentication cookie",
+        },
+      },
+
+      schemas: {
+        Error: {
+          type: "object",
+          properties: {
+            error: {
+              type: "string",
+              example: "Authentication required",
+            },
+          },
+        },
+
+        ScanRequest: {
+          type: "object",
+          required: ["url", "authorized"],
+          properties: {
+            url: {
+              type: "string",
+              example: "https://webshield-mern.onrender.com/",
+            },
+            authorized: {
+              type: "boolean",
+              example: true,
+            },
+          },
+        },
+      },
+    },
+
+    paths: {
+      "/api/health": {
+        get: {
+          tags: ["Health"],
+          summary: "Check API health",
+          responses: {
+            200: {
+              description: "API is running",
+            },
+          },
+        },
+      },
+
+      "/api/auth/register": {
+        post: {
+          tags: ["Authentication"],
+          summary: "Register a new user",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["email", "password"],
+                  properties: {
+                    email: {
+                      type: "string",
+                      example: "user@example.com",
+                    },
+                    password: {
+                      type: "string",
+                      example: "Password123",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: "User registered successfully" },
+            400: { description: "Invalid registration details" },
+            409: { description: "Account already exists" },
+          },
+        },
+      },
+
+      "/api/auth/login": {
+        post: {
+          tags: ["Authentication"],
+          summary: "Login user",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["email", "password"],
+                  properties: {
+                    email: {
+                      type: "string",
+                      example: "user@example.com",
+                    },
+                    password: {
+                      type: "string",
+                      example: "Password123",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Login successful; sets authentication cookie" },
+            401: { description: "Invalid credentials" },
+          },
+        },
+      },
+
+      "/api/auth/logout": {
+        post: {
+          tags: ["Authentication"],
+          summary: "Logout user",
+          responses: {
+            200: { description: "Logout successful" },
+          },
+        },
+      },
+
+      "/api/me": {
+        get: {
+          tags: ["Authentication"],
+          summary: "Get current authenticated user",
+          security: [{ cookieAuth: [] }],
+          responses: {
+            200: { description: "Current user details" },
+            401: { description: "Authentication required" },
+          },
+        },
+      },
+
+      "/api/auth/google": {
+        get: {
+          tags: ["Authentication"],
+          summary: "Start Google OAuth login",
+          responses: {
+            302: { description: "Redirect to Google authentication" },
+            503: { description: "Google OAuth is not configured" },
+          },
+        },
+      },
+
+      "/api/auth/google/callback": {
+        get: {
+          tags: ["Authentication"],
+          summary: "Google OAuth callback",
+          responses: {
+            302: { description: "Redirect after authentication" },
+          },
+        },
+      },
+
+      "/api/scans": {
+        get: {
+          tags: ["Scans"],
+          summary: "Get scan history of logged-in user",
+          security: [{ cookieAuth: [] }],
+          responses: {
+            200: { description: "List of user scans" },
+            401: { description: "Authentication required" },
+          },
+        },
+
+        post: {
+          tags: ["Scans"],
+          summary: "Start a new security scan",
+          security: [{ cookieAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  "$ref": "#/components/schemas/ScanRequest",
+                },
+              },
+            },
+          },
+          responses: {
+            202: { description: "Scan successfully queued" },
+            400: { description: "Invalid target or authorization missing" },
+            401: { description: "Authentication required" },
+          },
+        },
+      },
+
+      "/api/scans/{id}": {
+        get: {
+          tags: ["Scans"],
+          summary: "Get details of an individual scan",
+          security: [{ cookieAuth: [] }],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            200: { description: "Scan details" },
+            404: { description: "Scan not found" },
+          },
+        },
+      },
+
+      "/api/scans/{id}/report": {
+        get: {
+          tags: ["Scans"],
+          summary: "Download professional PDF scan report",
+          security: [{ cookieAuth: [] }],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            200: {
+              description: "PDF report",
+              content: {
+                "application/pdf": {
+                  schema: { type: "string", format: "binary" },
+                },
+              },
+            },
+            404: { description: "Scan not found" },
+            409: { description: "Scan is not completed yet" },
+          },
+        },
+      },
+    },
+  },
+
+  apis: [],
+});
+
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    swaggerOptions: {
+      withCredentials: true,
+    },
+  })
+);
+
 
 // ======================================================
 // Authentication Rate Limit
@@ -977,3 +1267,4 @@ server.listen(
     );
   }
 );
+
