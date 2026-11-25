@@ -78,7 +78,7 @@ async function runTests() {
 
     console.log("\nChecking authentication...");
 
-    await driver.sleep(5000);
+    await driver.sleep(15000);
 
     const pageText = await driver.findElement(
       By.css("body")
@@ -156,3 +156,5 @@ async function runTests() {
 }
 
 runTests();
+
+
