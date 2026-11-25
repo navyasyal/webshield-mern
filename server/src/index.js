@@ -11,19 +11,10 @@ import passport from "passport";
 import swaggerUi from "swagger-ui-express";
 import swaggerJsdoc from "swagger-jsdoc";
 
-import {
-  Strategy as GoogleStrategy,
-} from "passport-google-oauth20";
-
+import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import IORedis from "ioredis";
-
-import {
-  Server as SocketIOServer,
-} from "socket.io";
-
-import {
-  Queue,
-} from "bullmq";
+import { Server as SocketIOServer } from "socket.io";
+import { Queue } from "bullmq";
 
 import {
   connectDb,
@@ -31,39 +22,33 @@ import {
   Scan,
 } from "./db.js";
 
-import {
-  validateLabUrl,
-} from "./security.js";
-
-import {
-  generateProfessionalReport,
-} from "./report.js";
+import { validateLabUrl } from "./security.js";
+import { generateProfessionalReport } from "./report.js";
 
 // ======================================================
 // Configuration
 // ======================================================
 
 const PORT = Number(process.env.PORT || 5000);
-
-const REDIS_URL =
-  process.env.REDIS_URL || "redis://redis:6379";
-
+const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const JWT_SECRET = process.env.JWT_SECRET;
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
-// Vercel frontend URL
 const PUBLIC_URL =
   process.env.PUBLIC_URL || "http://localhost:8081";
 
-// Render backend URL
 const API_URL =
-  process.env.API_URL || `http://localhost:${PORT}`;
+  process.env.API_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  `http://localhost:${PORT}`;
+
+const ADMIN_EMAIL = String(
+  process.env.ADMIN_EMAIL || ""
+).trim().toLowerCase();
 
 const JWT_ISSUER = "webshield";
-
 const SCAN_PROGRESS_CHANNEL = "webshield:scan-progress";
 
 if (!JWT_SECRET) {
@@ -71,6 +56,7 @@ if (!JWT_SECRET) {
 }
 
 const publicOrigin = new URL(PUBLIC_URL).origin;
+const apiOrigin = new URL(API_URL).origin;
 
 // ======================================================
 // Express / HTTP / Socket.IO
@@ -84,7 +70,6 @@ const server = http.createServer(app);
 
 const io = new SocketIOServer(server, {
   path: "/socket.io",
-
   cors: {
     origin: publicOrigin,
     credentials: true,
@@ -96,7 +81,6 @@ const io = new SocketIOServer(server, {
 // ======================================================
 
 const cacheRedis = new IORedis(REDIS_URL);
-
 const progressSubscriber = new IORedis(REDIS_URL);
 
 const queueConnection = new IORedis(REDIS_URL, {
@@ -126,20 +110,9 @@ app.use(
   })
 );
 
-app.use(
-  express.json({
-    limit: "1mb",
-  })
-);
-
-app.use(
-  express.urlencoded({
-    extended: false,
-  })
-);
-
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
-
 app.use(passport.initialize());
 
 // ======================================================
@@ -154,13 +127,13 @@ const swaggerSpec = swaggerJsdoc({
       title: "WebShield API",
       version: "1.0.0",
       description:
-        "API documentation for WebShield - MERN-based web security scanner.",
+        "API documentation for WebShield - MERN-based web security scanner with authentication and RBAC.",
     },
 
     servers: [
       {
-        url: "https://webshield-api-n7dx.onrender.com",
-        description: "Production server",
+        url: API_URL,
+        description: "API server",
       },
       {
         url: "http://localhost:5000",
@@ -172,6 +145,7 @@ const swaggerSpec = swaggerJsdoc({
       { name: "Health", description: "API health checks" },
       { name: "Authentication", description: "User authentication" },
       { name: "Scans", description: "Security scanning operations" },
+      { name: "Admin", description: "Administrator-only operations" },
     ],
 
     components: {
@@ -209,6 +183,18 @@ const swaggerSpec = swaggerJsdoc({
             },
           },
         },
+
+        RoleUpdate: {
+          type: "object",
+          required: ["role"],
+          properties: {
+            role: {
+              type: "string",
+              enum: ["user", "admin"],
+              example: "admin",
+            },
+          },
+        },
       },
     },
 
@@ -218,9 +204,7 @@ const swaggerSpec = swaggerJsdoc({
           tags: ["Health"],
           summary: "Check API health",
           responses: {
-            200: {
-              description: "API is running",
-            },
+            200: { description: "API is running" },
           },
         },
       },
@@ -284,7 +268,7 @@ const swaggerSpec = swaggerJsdoc({
             },
           },
           responses: {
-            200: { description: "Login successful; sets authentication cookie" },
+            200: { description: "Login successful" },
             401: { description: "Invalid credentials" },
           },
         },
@@ -353,7 +337,7 @@ const swaggerSpec = swaggerJsdoc({
             content: {
               "application/json": {
                 schema: {
-                  "$ref": "#/components/schemas/ScanRequest",
+                  $ref: "#/components/schemas/ScanRequest",
                 },
               },
             },
@@ -396,7 +380,10 @@ const swaggerSpec = swaggerJsdoc({
               name: "id",
               in: "path",
               required: true,
-              schema: { type: "string" },
+              schema: {
+                type: "string",
+                format: "binary",
+              },
             },
           ],
           responses: {
@@ -404,12 +391,78 @@ const swaggerSpec = swaggerJsdoc({
               description: "PDF report",
               content: {
                 "application/pdf": {
-                  schema: { type: "string", format: "binary" },
+                  schema: {
+                    type: "string",
+                    format: "binary",
+                  },
                 },
               },
             },
             404: { description: "Scan not found" },
             409: { description: "Scan is not completed yet" },
+          },
+        },
+      },
+
+      "/api/admin/users": {
+        get: {
+          tags: ["Admin"],
+          summary: "Get all registered users",
+          description: "Admin role required.",
+          security: [{ cookieAuth: [] }],
+          responses: {
+            200: { description: "Users retrieved successfully" },
+            401: { description: "Authentication required" },
+            403: { description: "Admin access required" },
+          },
+        },
+      },
+
+      "/api/admin/scans": {
+        get: {
+          tags: ["Admin"],
+          summary: "Get all scans",
+          description: "Admin role required.",
+          security: [{ cookieAuth: [] }],
+          responses: {
+            200: { description: "Scans retrieved successfully" },
+            401: { description: "Authentication required" },
+            403: { description: "Admin access required" },
+          },
+        },
+      },
+
+      "/api/admin/users/{id}/role": {
+        patch: {
+          tags: ["Admin"],
+          summary: "Update a user's role",
+          description:
+            "Admin role required. An admin cannot change their own role.",
+          security: [{ cookieAuth: [] }],
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/RoleUpdate",
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Role updated successfully" },
+            400: { description: "Invalid role or user ID" },
+            401: { description: "Authentication required" },
+            403: { description: "Admin access required" },
+            404: { description: "User not found" },
           },
         },
       },
@@ -429,7 +482,6 @@ app.use(
   })
 );
 
-
 // ======================================================
 // Authentication Rate Limit
 // ======================================================
@@ -439,29 +491,33 @@ const authLimiter = rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-
   message: {
-    error:
-      "Too many authentication requests. Please try again later.",
+    error: "Too many authentication requests. Please try again later.",
   },
 });
 
 app.use("/api/auth", authLimiter);
 
 // ======================================================
-// Origin Protection
+// Origin Protection - FIXED
 // ======================================================
 
+// Allow the official frontend and this API's own origin.
+// Swagger is served from the API domain itself.
+
+const trustedOrigins = new Set([
+  publicOrigin,
+  apiOrigin,
+]);
+
 app.use("/api", (req, res, next) => {
-  if (
-    ["GET", "HEAD", "OPTIONS"].includes(req.method)
-  ) {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
     return next();
   }
 
   const origin = req.get("origin");
 
-  if (origin && origin !== publicOrigin) {
+  if (origin && !trustedOrigins.has(origin)) {
     return res.status(403).json({
       error: "Invalid request origin",
     });
@@ -492,15 +548,9 @@ function createToken(user) {
 function setAuthCookie(res, token) {
   res.cookie("ws_token", token, {
     httpOnly: true,
-
-    sameSite: PUBLIC_URL.startsWith("https://")
-      ? "none"
-      : "lax",
-
+    sameSite: PUBLIC_URL.startsWith("https://") ? "none" : "lax",
     secure: PUBLIC_URL.startsWith("https://"),
-
     maxAge: 7 * 24 * 60 * 60 * 1000,
-
     path: "/",
   });
 }
@@ -508,13 +558,8 @@ function setAuthCookie(res, token) {
 function clearAuthCookie(res) {
   res.clearCookie("ws_token", {
     httpOnly: true,
-
-    sameSite: PUBLIC_URL.startsWith("https://")
-      ? "none"
-      : "lax",
-
+    sameSite: PUBLIC_URL.startsWith("https://") ? "none" : "lax",
     secure: PUBLIC_URL.startsWith("https://"),
-
     path: "/",
   });
 }
@@ -533,13 +578,9 @@ async function requireAuth(req, res, next) {
       });
     }
 
-    const payload = jwt.verify(
-      token,
-      JWT_SECRET,
-      {
-        issuer: JWT_ISSUER,
-      }
-    );
+    const payload = jwt.verify(token, JWT_SECRET, {
+      issuer: JWT_ISSUER,
+    });
 
     const user = await User.findById(payload.sub);
 
@@ -552,9 +593,7 @@ async function requireAuth(req, res, next) {
     }
 
     req.user = user;
-
     next();
-
   } catch {
     clearAuthCookie(res);
 
@@ -562,6 +601,28 @@ async function requireAuth(req, res, next) {
       error: "Invalid or expired session",
     });
   }
+}
+
+// ======================================================
+// Role-Based Access Control
+// ======================================================
+
+function requireRole(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        error: "Authentication required",
+      });
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        error: "Access denied. Insufficient permissions.",
+      });
+    }
+
+    next();
+  };
 }
 
 // ======================================================
@@ -573,11 +634,8 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
     new GoogleStrategy(
       {
         clientID: GOOGLE_CLIENT_ID,
-
         clientSecret: GOOGLE_CLIENT_SECRET,
-
-        callbackURL:
-          `${API_URL}/api/auth/google/callback`,
+        callbackURL: `${API_URL}/api/auth/google/callback`,
       },
 
       async (accessToken, refreshToken, profile, done) => {
@@ -605,9 +663,7 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
           });
 
           if (!user) {
-            user = await User.findOne({
-              email,
-            });
+            user = await User.findOne({ email });
           }
 
           if (user) {
@@ -620,7 +676,6 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
             }
 
             await user.save();
-
           } else {
             user = await User.create({
               name: profile.displayName || "",
@@ -631,7 +686,6 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
           }
 
           return done(null, user);
-
         } catch (error) {
           return done(error);
         }
@@ -650,17 +704,12 @@ function parseCookies(cookieHeader = "") {
   for (const part of cookieHeader.split(";")) {
     const separator = part.indexOf("=");
 
-    if (separator === -1) {
-      continue;
-    }
+    if (separator === -1) continue;
 
     const key = part.slice(0, separator).trim();
-
     const value = part.slice(separator + 1).trim();
 
-    if (!key) {
-      continue;
-    }
+    if (!key) continue;
 
     try {
       cookies[key] = decodeURIComponent(value);
@@ -685,35 +734,23 @@ io.use(async (socket, next) => {
     const token = cookies.ws_token;
 
     if (!token) {
-      return next(
-        new Error("Authentication required")
-      );
+      return next(new Error("Authentication required"));
     }
 
-    const payload = jwt.verify(
-      token,
-      JWT_SECRET,
-      {
-        issuer: JWT_ISSUER,
-      }
-    );
+    const payload = jwt.verify(token, JWT_SECRET, {
+      issuer: JWT_ISSUER,
+    });
 
     const user = await User.findById(payload.sub);
 
     if (!user) {
-      return next(
-        new Error("User not found")
-      );
+      return next(new Error("User not found"));
     }
 
     socket.user = user;
-
     next();
-
   } catch {
-    next(
-      new Error("Invalid session")
-    );
+    next(new Error("Invalid session"));
   }
 });
 
@@ -737,40 +774,28 @@ io.on("connection", (socket) => {
 // Redis Scan Progress
 // ======================================================
 
-await progressSubscriber.subscribe(
-  SCAN_PROGRESS_CHANNEL
-);
+await progressSubscriber.subscribe(SCAN_PROGRESS_CHANNEL);
 
-progressSubscriber.on(
-  "message",
-  async (channel, message) => {
-    if (channel !== SCAN_PROGRESS_CHANNEL) {
-      return;
-    }
+progressSubscriber.on("message", async (channel, message) => {
+  if (channel !== SCAN_PROGRESS_CHANNEL) return;
 
-    try {
-      const event = JSON.parse(message);
+  try {
+    const event = JSON.parse(message);
 
-      if (!event.owner) {
-        return;
-      }
+    if (!event.owner) return;
 
-      await cacheRedis.del(
-        `scans:${event.owner}`
-      );
+    await cacheRedis.del(`scans:${event.owner}`);
 
-      io
-        .to(`user:${event.owner}`)
-        .emit("scan:progress", event);
-
-    } catch (error) {
-      console.error(
-        "Progress subscriber error:",
-        error.message
-      );
-    }
+    io
+      .to(`user:${event.owner}`)
+      .emit("scan:progress", event);
+  } catch (error) {
+    console.error(
+      "Progress subscriber error:",
+      error.message
+    );
   }
-);
+});
 
 // ======================================================
 // Health
@@ -789,124 +814,98 @@ app.get("/api/health", (req, res) => {
 // Register
 // ======================================================
 
-app.post(
-  "/api/auth/register",
-  async (req, res, next) => {
-    try {
-      const email = String(
-        req.body.email || ""
-      )
-        .trim()
-        .toLowerCase();
+app.post("/api/auth/register", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
 
-      const password = String(
-        req.body.password || ""
-      );
+    const password = String(req.body.password || "");
 
-      if (!email || !password) {
-        return res.status(400).json({
-          error: "Email and password are required",
-        });
-      }
-
-      if (password.length < 8) {
-        return res.status(400).json({
-          error: "Password must be at least 8 characters",
-        });
-      }
-
-      const existing = await User.findOne({
-        email,
+    if (!email || !password) {
+      return res.status(400).json({
+        error: "Email and password are required",
       });
-
-      if (existing) {
-        return res.status(409).json({
-          error:
-            "An account with this email already exists",
-        });
-      }
-
-      const passwordHash = await bcrypt.hash(
-        password,
-        12
-      );
-
-      const user = await User.create({
-        email,
-        passwordHash,
-        role: "user",
-      });
-
-      const token = createToken(user);
-
-      setAuthCookie(res, token);
-
-      res.status(201).json({
-        id: user._id,
-        email: user.email,
-        role: user.role,
-      });
-
-    } catch (error) {
-      next(error);
     }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        error: "Password must be at least 8 characters",
+      });
+    }
+
+    const existing = await User.findOne({ email });
+
+    if (existing) {
+      return res.status(409).json({
+        error: "An account with this email already exists",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const user = await User.create({
+      email,
+      passwordHash,
+      role: "user",
+    });
+
+    const token = createToken(user);
+    setAuthCookie(res, token);
+
+    res.status(201).json({
+      id: user._id,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (error) {
+    next(error);
   }
-);
+});
 
 // ======================================================
 // Login
 // ======================================================
 
-app.post(
-  "/api/auth/login",
-  async (req, res, next) => {
-    try {
-      const email = String(
-        req.body.email || ""
-      )
-        .trim()
-        .toLowerCase();
+app.post("/api/auth/login", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
 
-      const password = String(
-        req.body.password || ""
-      );
+    const password = String(req.body.password || "");
 
-      const user = await User.findOne({
-        email,
+    const user = await User.findOne({ email });
+
+    if (!user || !user.passwordHash) {
+      return res.status(401).json({
+        error: "Invalid email or password",
       });
-
-      if (!user || !user.passwordHash) {
-        return res.status(401).json({
-          error: "Invalid email or password",
-        });
-      }
-
-      const valid = await bcrypt.compare(
-        password,
-        user.passwordHash
-      );
-
-      if (!valid) {
-        return res.status(401).json({
-          error: "Invalid email or password",
-        });
-      }
-
-      const token = createToken(user);
-
-      setAuthCookie(res, token);
-
-      res.json({
-        id: user._id,
-        email: user.email,
-        role: user.role,
-      });
-
-    } catch (error) {
-      next(error);
     }
+
+    const valid = await bcrypt.compare(
+      password,
+      user.passwordHash
+    );
+
+    if (!valid) {
+      return res.status(401).json({
+        error: "Invalid email or password",
+      });
+    }
+
+    const token = createToken(user);
+    setAuthCookie(res, token);
+
+    res.json({
+      id: user._id,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (error) {
+    next(error);
   }
-);
+});
 
 // ======================================================
 // Logout
@@ -937,76 +936,66 @@ app.get("/api/me", requireAuth, (req, res) => {
 // Google Login
 // ======================================================
 
-app.get(
-  "/api/auth/google",
-  (req, res, next) => {
-    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-      return res.status(503).json({
-        error: "Google OAuth is not configured",
-      });
-    }
-
-    passport.authenticate(
-      "google",
-      {
-        scope: ["profile", "email"],
-        session: false,
-        prompt: "select_account",
-      }
-    )(req, res, next);
+app.get("/api/auth/google", (req, res, next) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return res.status(503).json({
+      error: "Google OAuth is not configured",
+    });
   }
-);
+
+  passport.authenticate(
+    "google",
+    {
+      scope: ["profile", "email"],
+      session: false,
+      prompt: "select_account",
+    }
+  )(req, res, next);
+});
 
 // ======================================================
 // Google Callback
 // ======================================================
 
-app.get(
-  "/api/auth/google/callback",
-  (req, res, next) => {
-    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-      return res.redirect(
-        `${PUBLIC_URL}/?auth=google-not-configured`
-      );
-    }
-
-    passport.authenticate(
-      "google",
-      {
-        session: false,
-        failureRedirect:
-          `${PUBLIC_URL}/?auth=google-failed`,
-      },
-      (error, user) => {
-        if (error || !user) {
-          console.error(
-            "Google OAuth error:",
-            error?.message || "No user"
-          );
-
-          return res.redirect(
-            `${PUBLIC_URL}/?auth=google-failed`
-          );
-        }
-
-        const token = createToken(user);
-
-        setAuthCookie(res, token);
-
-        return res.redirect(PUBLIC_URL);
-      }
-    )(req, res, next);
+app.get("/api/auth/google/callback", (req, res, next) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return res.redirect(
+      `${PUBLIC_URL}/?auth=google-not-configured`
+    );
   }
-);
+
+  passport.authenticate(
+    "google",
+    {
+      session: false,
+      failureRedirect: `${PUBLIC_URL}/?auth=google-failed`,
+    },
+    (error, user) => {
+      if (error || !user) {
+        console.error(
+          "Google OAuth error:",
+          error?.message || "No user"
+        );
+
+        return res.redirect(
+          `${PUBLIC_URL}/?auth=google-failed`
+        );
+      }
+
+      const token = createToken(user);
+      setAuthCookie(res, token);
+
+      return res.redirect(PUBLIC_URL);
+    }
+  )(req, res, next);
+});
 
 // ======================================================
 // Scan Cache
 // ======================================================
 
 async function clearUserScanCache(userId) {
-  await cacheRedis.del(
-    `scans:${userId}`
-  );
+  await cacheRedis.del(`scans:${userId}`);
 }
 
 // ======================================================
@@ -1019,25 +1008,18 @@ app.get(
   async (req, res, next) => {
     try {
       const owner = req.user._id.toString();
-
       const cacheKey = `scans:${owner}`;
 
-      const cached = await cacheRedis.get(
-        cacheKey
-      );
+      const cached = await cacheRedis.get(cacheKey);
 
       if (cached) {
-        return res.json(
-          JSON.parse(cached)
-        );
+        return res.json(JSON.parse(cached));
       }
 
       const scans = await Scan.find({
         owner: req.user._id,
       })
-        .sort({
-          createdAt: -1,
-        })
+        .sort({ createdAt: -1 })
         .lean();
 
       await cacheRedis.set(
@@ -1048,7 +1030,6 @@ app.get(
       );
 
       res.json(scans);
-
     } catch (error) {
       next(error);
     }
@@ -1106,14 +1087,8 @@ app.post(
         },
         {
           jobId: scan._id.toString(),
-
-          removeOnComplete: {
-            count: 100,
-          },
-
-          removeOnFail: {
-            count: 100,
-          },
+          removeOnComplete: { count: 100 },
+          removeOnFail: { count: 100 },
         }
       );
 
@@ -1125,7 +1100,6 @@ app.post(
         id: scan._id,
         status: scan.status,
       });
-
     } catch (error) {
       next(error);
     }
@@ -1153,7 +1127,6 @@ app.get(
       }
 
       res.json(scan);
-
     } catch (error) {
       next(error);
     }
@@ -1192,7 +1165,113 @@ app.get(
         req.user,
         res
       );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
+// ======================================================
+// ADMIN: GET ALL USERS
+// ======================================================
+
+app.get(
+  "/api/admin/users",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res, next) => {
+    try {
+      const users = await User.find()
+        .select("name email role createdAt updatedAt")
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean();
+
+      res.json({
+        total: users.length,
+        users,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ======================================================
+// ADMIN: GET ALL SCANS
+// ======================================================
+
+app.get(
+  "/api/admin/scans",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res, next) => {
+    try {
+      const scans = await Scan.find()
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean();
+
+      res.json({
+        total: scans.length,
+        scans,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ======================================================
+// ADMIN: UPDATE USER ROLE
+// ======================================================
+
+app.patch(
+  "/api/admin/users/:id/role",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res, next) => {
+    try {
+      const { role } = req.body;
+      const userId = req.params.id;
+
+      if (!["user", "admin"].includes(role)) {
+        return res.status(400).json({
+          error: "Role must be either user or admin",
+        });
+      }
+
+      if (!/^[0-9a-fA-F]{24}$/.test(userId)) {
+        return res.status(400).json({
+          error: "Invalid user ID",
+        });
+      }
+
+      if (userId === req.user._id.toString()) {
+        return res.status(400).json({
+          error: "You cannot change your own role",
+        });
+      }
+
+      const user = await User.findByIdAndUpdate(
+        userId,
+        { role },
+        {
+          new: true,
+          runValidators: true,
+        }
+      ).select("name email role");
+
+      if (!user) {
+        return res.status(404).json({
+          error: "User not found",
+        });
+      }
+
+      res.json({
+        message: "User role updated successfully",
+        user,
+      });
     } catch (error) {
       next(error);
     }
@@ -1258,13 +1337,27 @@ app.use((error, req, res, next) => {
 
 await connectDb();
 
-server.listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-    console.log(
-      `WebShield API + Socket.IO ready on port ${PORT}`
+// Promote only the existing account explicitly configured
+// by the deployment environment.
+
+if (ADMIN_EMAIL) {
+  const adminUser = await User.findOneAndUpdate(
+    { email: ADMIN_EMAIL },
+    { $set: { role: "admin" } },
+    { new: true }
+  );
+
+  if (adminUser) {
+    console.log(`Initial admin configured: ${ADMIN_EMAIL}`);
+  } else {
+    console.warn(
+      `ADMIN_EMAIL account not found: ${ADMIN_EMAIL}`
     );
   }
-);
+}
 
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `WebShield API + Socket.IO ready on port ${PORT}`
+  );
+});
